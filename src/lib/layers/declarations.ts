@@ -27,6 +27,9 @@ export type L2Homepage = {
   aiMetaTags: Record<string, string>;
   /** Content of <meta name="ai-content-declaration" content="..."> if any. */
   aiContentDeclaration: string | null;
+  /** Curated CDN/policy-relevant response headers, lowercased keys. Used as
+   * input to Layer 3 (CDN fingerprint) without a second fetch. */
+  responseHeaders: Record<string, string>;
 };
 
 export type L2LlmsTxt = {
@@ -67,6 +70,42 @@ const RELEVANT_META_NAMES = new Set<string>([
   ...AI_BOT_NAMES,
 ]);
 
+// Headers we capture from the homepage response for Layer 3 use. Lowercased.
+const INTERESTING_HEADERS = [
+  // Content / policy
+  "x-robots-tag",
+  "cache-control",
+  // Hosting / CDN identifying headers
+  "server",
+  "via",
+  "powered-by",
+  "x-powered-by",
+  // Cloudflare
+  "cf-ray",
+  "cf-cache-status",
+  // CloudFront / AWS
+  "x-amz-cf-id",
+  "x-amz-cf-pop",
+  // Fastly
+  "x-served-by",
+  "x-fastly-request-id",
+  "x-cache",
+  // Akamai
+  "x-akamai-request-id",
+  "x-akamai-transformed",
+  // Vercel
+  "x-vercel-id",
+  "x-vercel-cache",
+  // Netlify
+  "x-nf-request-id",
+  // Imperva / Incapsula
+  "x-iinfo",
+  "x-cdn",
+  // Sucuri
+  "x-sucuri-id",
+  "x-sucuri-cache",
+] as const;
+
 const META_TAG_RE = /<meta\b[^>]*>/gi;
 const META_NAME_RE = /\bname=["']([^"']+)["']/i;
 const META_CONTENT_RE = /\bcontent=["']([^"']*)["']/i;
@@ -101,19 +140,25 @@ export async function fetchL2(rootDomain: string): Promise<L2Result> {
       redirect: "follow",
       signal: AbortSignal.timeout(POLITENESS.fetchTimeoutMs),
     });
+    const responseHeaders: Record<string, string> = {};
+    for (const name of INTERESTING_HEADERS) {
+      const v = res.headers.get(name);
+      if (v) responseHeaders[name] = v;
+    }
     if (!res.ok) {
       homepage = {
         fetchedUrl: res.url,
         status: "error",
         httpStatus: res.status,
         errorMessage: `HTTP ${res.status}`,
-        xRobotsTag: null,
+        xRobotsTag: responseHeaders["x-robots-tag"] ?? null,
         metaRobots: null,
         aiMetaTags: {},
         aiContentDeclaration: null,
+        responseHeaders,
       };
     } else {
-      const xRobotsTag = res.headers.get("x-robots-tag");
+      const xRobotsTag = responseHeaders["x-robots-tag"] ?? null;
       const html = await res.text();
       const metas = extractRelevantMetas(html);
       const aiMetas: Record<string, string> = {};
@@ -128,6 +173,7 @@ export async function fetchL2(rootDomain: string): Promise<L2Result> {
         metaRobots: metas.robots ?? null,
         aiMetaTags: aiMetas,
         aiContentDeclaration: metas["ai-content-declaration"] ?? null,
+        responseHeaders,
       };
     }
   } catch (err) {
@@ -140,6 +186,7 @@ export async function fetchL2(rootDomain: string): Promise<L2Result> {
       metaRobots: null,
       aiMetaTags: {},
       aiContentDeclaration: null,
+      responseHeaders: {},
     };
   }
 

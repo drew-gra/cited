@@ -40,17 +40,17 @@ export default function MethodologyPage() {
 
       <Section
         title="Layer 2 — HTTP and HTML declarations"
-        status="Coming soon"
+        status="Live"
         body={[
-          "Beyond robots.txt, sites can signal preferences via the X-Robots-Tag response header, the meta robots tag (including max-snippet and noai variants), and emerging conventions like llms.txt and the IPTC dataMining field. We sample the homepage and a representative article, extract these signals, and surface them per platform.",
+          "Beyond robots.txt, sites can signal preferences via the X-Robots-Tag response header, the meta robots tag (including max-snippet and noai variants), and emerging conventions like llms.txt and the IPTC dataMining field. We fetch the homepage, extract these signals, and probe /llms.txt as a separate request. The /llms.txt fetch validates content-type and structure to avoid false positives from CMS soft-404s that serve the homepage for unknown paths.",
         ]}
       />
 
       <Section
         title="Layer 3 — Infrastructure fingerprint"
-        status="Coming soon"
+        status="Live"
         body={[
-          "Response headers identify the CDN or WAF a site uses (Cloudflare, Fastly, Akamai, CloudFront). Network-layer AI bot blocking — increasingly common — typically happens at the CDN, so this layer informs whether a site is likely to drop bot traffic before it reaches the origin.",
+          "Response headers from the homepage identify the CDN or WAF a site uses — Cloudflare (cf-ray), CloudFront (x-amz-cf-id), Fastly (x-served-by), Akamai (x-akamai-request-id), Vercel, Netlify, Imperva, Sucuri. Network-layer AI bot blocking — increasingly common — typically happens at the CDN, so this layer informs whether a site is likely to drop bot traffic before it reaches the origin. Layer 3 piggybacks on Layer 2's homepage fetch; no separate network request.",
         ]}
       />
 
@@ -65,9 +65,10 @@ export default function MethodologyPage() {
 
       <Section
         title="Layer 5 — Common Crawl presence"
-        status="Coming soon"
+        status="Live"
         body={[
-          "Common Crawl is one of the largest public web crawls and feeds many open and proprietary AI training corpora. We query the Common Crawl CDX index for the domain across the most recent six monthly indexes. Low or trending-down coverage is a leading indicator that models trained primarily on Common Crawl will not have seen the site's recent content.",
+          "Common Crawl is one of the largest public web crawls and feeds many open and proprietary AI training corpora. We query the Common Crawl CDX index for the domain across the most recent six monthly CC-MAIN indexes, count records per snapshot, and report a coverage bucket (absent / low / moderate / high) plus a trend direction (decreasing / steady / increasing).",
+          "Low or trending-down coverage is a leading indicator that models trained primarily on Common Crawl will not have seen the site's recent content. CC presence is permanent for past indexes — a publisher who blocks CC today still has whatever history CC captured before the block took effect. CC absence does not prove training-data absence (AI companies use many corpora), and CC presence does not prove training-data presence (companies filter what they ingest).",
         ]}
       />
 

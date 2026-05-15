@@ -84,6 +84,7 @@ export default function ResultPage({
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [openPlatform, setOpenPlatform] = useState<AiPlatform | null>(null);
+  const [openLayer, setOpenLayer] = useState<LayerNumber | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -246,15 +247,37 @@ export default function ResultPage({
         <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
           {([1, 2, 3, 4, 5] as const).map((layer) => {
             const snap = data.run.layers[layer];
+            const isOpen = openLayer === layer;
+            const hasEvidence =
+              (layer === 1 && data.layer1Signal !== null) ||
+              (layer === 2 && data.layer2Signal !== null) ||
+              (layer === 3 && data.layer3Signal !== null) ||
+              (layer === 5 && data.layer5Signal !== null);
             return (
-              <li
-                key={layer}
-                className="flex flex-col gap-1 py-4 sm:flex-row sm:justify-between sm:gap-8"
-              >
-                <span className="text-gray-100">{LAYER_LABEL[layer]}</span>
-                <span className="text-gray-400 sm:text-right">
-                  {layerStatusLabel(snap)}
-                </span>
+              <li key={layer} className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => setOpenLayer(isOpen ? null : layer)}
+                  disabled={!hasEvidence}
+                  className="flex flex-col gap-1 py-4 text-left sm:flex-row sm:justify-between sm:gap-8 disabled:cursor-default"
+                >
+                  <span className="text-gray-100">{LAYER_LABEL[layer]}</span>
+                  <span className="text-gray-400 sm:text-right">
+                    {layerStatusLabel(snap)}
+                  </span>
+                </button>
+                {isOpen && layer === 1 && data.layer1Signal ? (
+                  <Layer1Evidence signal={data.layer1Signal} />
+                ) : null}
+                {isOpen && layer === 2 && data.layer2Signal ? (
+                  <Layer2Evidence signal={data.layer2Signal} />
+                ) : null}
+                {isOpen && layer === 3 && data.layer3Signal ? (
+                  <Layer3Evidence signal={data.layer3Signal} />
+                ) : null}
+                {isOpen && layer === 5 && data.layer5Signal ? (
+                  <Layer5Evidence signal={data.layer5Signal} />
+                ) : null}
               </li>
             );
           })}
@@ -287,6 +310,259 @@ export default function ResultPage({
         </Link>
       </footer>
     </main>
+  );
+}
+
+function Layer1Evidence({
+  signal,
+}: {
+  signal: NonNullable<AssessResponse["layer1Signal"]>;
+}) {
+  return (
+    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+      {signal.platform.platform !== "unknown" ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+            Hosting platform detected
+          </span>
+          <span className="text-gray-100">
+            {signal.platform.platform}
+            {signal.platform.isDefault ? " (platform default)" : ""}
+          </span>
+          <p className="text-gray-400">{signal.platform.note}</p>
+        </div>
+      ) : null}
+      {signal.sitemaps.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+            Sitemaps declared
+          </span>
+          <span className="text-gray-400">
+            {signal.sitemaps.length} sitemap
+            {signal.sitemaps.length === 1 ? "" : "s"}
+          </span>
+        </div>
+      ) : null}
+      {signal.status === "ok" && signal.rawText ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+            robots.txt source
+          </span>
+          <pre className="overflow-x-auto whitespace-pre-wrap border border-gray-700 p-4 text-gray-400">
+            {signal.rawText}
+          </pre>
+        </div>
+      ) : signal.status === "not_found" ? (
+        <p className="text-gray-400">
+          No /robots.txt at this domain (404). Bots are allowed by convention.
+        </p>
+      ) : signal.status === "error" ? (
+        <p className="text-gray-400">
+          Could not fetch /robots.txt: {signal.errorMessage ?? "unknown error"}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function Layer2Evidence({
+  signal,
+}: {
+  signal: NonNullable<AssessResponse["layer2Signal"]>;
+}) {
+  const aiMetaEntries = Object.entries(signal.homepage.aiMetaTags);
+  return (
+    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+      {signal.homepage.status === "error" ? (
+        <p className="text-gray-400">
+          Could not fetch homepage:{" "}
+          {signal.homepage.errorMessage ?? "unknown error"}.
+          {signal.homepage.httpStatus
+            ? ` HTTP ${signal.homepage.httpStatus}.`
+            : ""}{" "}
+          The site may be blocking generic crawlers at the CDN; Layer 4 will
+          probe further when it ships.
+        </p>
+      ) : (
+        <>
+          <Row
+            label="X-Robots-Tag header"
+            value={signal.homepage.xRobotsTag ?? "—"}
+          />
+          <Row
+            label="meta robots"
+            value={signal.homepage.metaRobots ?? "—"}
+          />
+          {aiMetaEntries.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+                AI bot meta tags
+              </span>
+              <ul className="flex flex-col gap-1 text-gray-100">
+                {aiMetaEntries.map(([name, value]) => (
+                  <li key={name}>
+                    <span className="text-gray-400">{name}: </span>
+                    {value}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <Row label="AI bot meta tags" value="—" />
+          )}
+          {signal.homepage.aiContentDeclaration ? (
+            <Row
+              label="ai-content-declaration"
+              value={signal.homepage.aiContentDeclaration}
+            />
+          ) : null}
+        </>
+      )}
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          /llms.txt
+        </span>
+        <span className="text-gray-400">
+          {signal.llmsTxt.state === "present"
+            ? `present (${signal.llmsTxt.sizeBytes} bytes) — the publisher exposes a Markdown-formatted summary file intended for LLMs.`
+            : signal.llmsTxt.state === "error"
+              ? `error fetching: ${signal.llmsTxt.errorMessage ?? "unknown"}`
+              : `absent (HTTP ${signal.llmsTxt.httpStatus ?? "?"})`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Layer3Evidence({
+  signal,
+}: {
+  signal: NonNullable<AssessResponse["layer3Signal"]>;
+}) {
+  return (
+    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          CDN / hosting detected
+        </span>
+        <span className="text-gray-100">
+          {signal.detected.length > 0 ? signal.detected.join(", ") : "—"}
+        </span>
+        {signal.detected.length === 0 ? (
+          <p className="text-gray-400">
+            No known CDN signatures matched. The site may be origin-served, or
+            using a CDN we don&apos;t yet fingerprint.
+          </p>
+        ) : null}
+      </div>
+      {signal.evidence.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+            Evidence
+          </span>
+          <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
+            {signal.evidence.map((e, i) => (
+              <li
+                key={i}
+                className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
+              >
+                <span className="text-gray-100">{e.reason}</span>
+                <span className="text-gray-400 sm:text-right">
+                  {e.header}: {e.value}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Layer5Evidence({
+  signal,
+}: {
+  signal: NonNullable<AssessResponse["layer5Signal"]>;
+}) {
+  if (signal.indexesQueried === 0) {
+    return (
+      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+        <p className="text-gray-400">
+          Could not fetch Common Crawl index metadata. The CDX API may be
+          down or rate-limiting; try refreshing.
+        </p>
+      </div>
+    );
+  }
+
+  const coverageLabel: Record<typeof signal.coverageBucket, string> = {
+    absent: "Absent",
+    low: "Low",
+    moderate: "Moderate",
+    high: "High",
+  };
+  const trendLabel: Record<typeof signal.trend, string> = {
+    absent: "Not present in any queried index",
+    decreasing: "Decreasing — appears less in recent indexes",
+    steady: "Steady across the sampled window",
+    increasing: "Increasing — appears more in recent indexes",
+    insufficient_data: "Insufficient data to determine trend",
+  };
+  const anyCapped = signal.indexes.some((i) => i.capped);
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Coverage
+        </span>
+        <span className="text-gray-100">
+          {coverageLabel[signal.coverageBucket]} —{" "}
+          {signal.indexesPresent}/{signal.indexesQueried} indexes contain
+          records · {signal.totalRecords}
+          {anyCapped ? "+" : ""} records total
+        </span>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Trend
+        </span>
+        <span className="text-gray-400">{trendLabel[signal.trend]}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Per-index breakdown
+        </span>
+        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
+          {signal.indexes.map((idx) => (
+            <li
+              key={idx.indexName}
+              className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
+            >
+              <span className="text-gray-100">{idx.indexName}</span>
+              <span className="text-gray-400 sm:text-right">
+                {idx.error
+                  ? `error: ${idx.error}`
+                  : `${idx.records}${idx.capped ? "+" : ""} record${
+                      idx.records === 1 ? "" : "s"
+                    }`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8">
+      <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+        {label}
+      </span>
+      <span className="text-gray-400 sm:text-right">{value}</span>
+    </div>
   );
 }
 

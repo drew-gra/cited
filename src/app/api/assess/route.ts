@@ -7,6 +7,12 @@ import { normalizeUrl } from "@/lib/domain";
 import { checkAndRecordIpRateLimit } from "@/lib/rate-limit";
 import { inngest } from "@/lib/inngest/client";
 
+// Layers the Inngest workflow currently runs end-to-end. The cache check
+// only short-circuits when every one of these has a fresh signal AND the
+// most-recent run has all of them marked done (not skipped). Add layers
+// here as they ship.
+const IMPLEMENTED_LAYERS = [1, 2, 3, 5] as const;
+
 const bodySchema = z.object({
   url: z.string().min(1),
   forceRefresh: z.boolean().optional().default(false),
@@ -62,35 +68,58 @@ export async function POST(req: NextRequest) {
     outletId = newOutlet.id;
   }
 
-  // Cache check (slice 0: only Layer 1 has a TTL to consult).
-  if (!parsed.forceRefresh) {
-    const [latestL1] = await db
-      .select()
-      .from(signals)
-      .where(and(eq(signals.outletId, outletId), eq(signals.layer, 1)))
-      .orderBy(desc(signals.capturedAt))
-      .limit(1);
+  // Compute per-layer freshness. The Inngest workflow will only re-fetch
+  // layers that are stale or missing; fresh layers reuse their existing
+  // signals from prior runs.
+  const freshnessPairs = await Promise.all(
+    IMPLEMENTED_LAYERS.map(async (layer) => {
+      const [latest] = await db
+        .select()
+        .from(signals)
+        .where(
+          and(eq(signals.outletId, outletId), eq(signals.layer, layer)),
+        )
+        .orderBy(desc(signals.capturedAt))
+        .limit(1);
+      if (!latest) return [layer, false] as const;
+      const ageSeconds = (Date.now() - latest.capturedAt.getTime()) / 1000;
+      return [layer, ageSeconds < latest.ttlSeconds] as const;
+    }),
+  );
+  const freshness: Record<number, boolean> = Object.fromEntries(
+    freshnessPairs,
+  );
 
-    if (latestL1) {
-      const ageSeconds = (Date.now() - latestL1.capturedAt.getTime()) / 1000;
-      if (ageSeconds < latestL1.ttlSeconds) {
-        const [recentRun] = await db
-          .select()
-          .from(assessmentRuns)
-          .where(
-            and(
-              eq(assessmentRuns.outletId, outletId),
-              eq(assessmentRuns.status, "done"),
-            ),
-          )
-          .orderBy(desc(assessmentRuns.createdAt))
-          .limit(1);
-        if (recentRun) {
-          return NextResponse.json({ id: recentRun.id, cached: true });
-        }
-      }
+  const allFresh = IMPLEMENTED_LAYERS.every((l) => freshness[l]);
+
+  // Cache hit: every implemented layer is fresh, AND a prior run exists
+  // where every implemented layer is marked done.
+  if (!parsed.forceRefresh && allFresh) {
+    const [recentRun] = await db
+      .select()
+      .from(assessmentRuns)
+      .where(
+        and(
+          eq(assessmentRuns.outletId, outletId),
+          eq(assessmentRuns.status, "done"),
+          eq(assessmentRuns.layer1Status, "done"),
+          eq(assessmentRuns.layer2Status, "done"),
+          eq(assessmentRuns.layer3Status, "done"),
+          eq(assessmentRuns.layer5Status, "done"),
+        ),
+      )
+      .orderBy(desc(assessmentRuns.createdAt))
+      .limit(1);
+    if (recentRun) {
+      return NextResponse.json({ id: recentRun.id, cached: true });
     }
   }
+
+  // Decide which layers actually need to run. Force-refresh runs everything;
+  // otherwise only the stale or missing layers.
+  const layersToRun: number[] = parsed.forceRefresh
+    ? [...IMPLEMENTED_LAYERS]
+    : IMPLEMENTED_LAYERS.filter((l) => !freshness[l]);
 
   const ip = getIp(req);
   const rateLimit = await checkAndRecordIpRateLimit(ip);
@@ -104,12 +133,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Pre-mark layers as "done" for layers we're reusing from prior runs; the
+  // Inngest workflow will transition the layers in layersToRun through
+  // running → done. L4 is not yet implemented, so it stays "skipped."
+  const layerInitialStatus = (layer: 1 | 2 | 3 | 4 | 5) => {
+    if (layer === 4) return "skipped" as const;
+    if (layersToRun.includes(layer)) return "pending" as const;
+    return "done" as const;
+  };
+
   const [newRun] = await db
     .insert(assessmentRuns)
     .values({
       outletId,
       ipAddress: ip,
       forceRefresh: parsed.forceRefresh,
+      layer1Status: layerInitialStatus(1),
+      layer2Status: layerInitialStatus(2),
+      layer3Status: layerInitialStatus(3),
+      layer4Status: layerInitialStatus(4),
+      layer5Status: layerInitialStatus(5),
     })
     .returning({ id: assessmentRuns.id });
 
@@ -120,6 +163,7 @@ export async function POST(req: NextRequest) {
       outletId,
       rootDomain: normalized.rootDomain,
       forceRefresh: parsed.forceRefresh,
+      layersToRun,
     },
   });
 

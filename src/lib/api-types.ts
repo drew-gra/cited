@@ -6,6 +6,9 @@ import type {
   RunStatus,
 } from "./db/schema";
 import type { RobotsLayer1Result } from "./layers/robots";
+import type { L2Result } from "./layers/declarations";
+import type { L3Result } from "./layers/cdn";
+import type { L5Result } from "./layers/common-crawl";
 
 export type LayerNumber = 1 | 2 | 3 | 4 | 5;
 
@@ -40,6 +43,9 @@ export type AssessResponse = {
   };
   assessments: PlatformAssessment[];
   layer1Signal: RobotsLayer1Result | null;
+  layer2Signal: L2Result | null;
+  layer3Signal: L3Result | null;
+  layer5Signal: L5Result | null;
 };
 
 export type AssessRequestBody = {

@@ -18,6 +18,9 @@ import type {
 } from "@/lib/api-types";
 import type { AiPlatform } from "@/lib/ai-platforms";
 import type { RobotsLayer1Result } from "@/lib/layers/robots";
+import type { L2Result } from "@/lib/layers/declarations";
+import type { L3Result } from "@/lib/layers/cdn";
+import type { L5Result } from "@/lib/layers/common-crawl";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -81,6 +84,12 @@ export async function GET(_: Request, { params }: RouteContext) {
   const layer1Signal =
     (latestPerLayer.get(1)?.signalValue as RobotsLayer1Result | undefined) ??
     null;
+  const layer2Signal =
+    (latestPerLayer.get(2)?.signalValue as L2Result | undefined) ?? null;
+  const layer3Signal =
+    (latestPerLayer.get(3)?.signalValue as L3Result | undefined) ?? null;
+  const layer5Signal =
+    (latestPerLayer.get(5)?.signalValue as L5Result | undefined) ?? null;
 
   const response: AssessResponse = {
     id: run.id,
@@ -110,6 +119,9 @@ export async function GET(_: Request, { params }: RouteContext) {
       confidence: a.confidence,
     })),
     layer1Signal,
+    layer2Signal,
+    layer3Signal,
+    layer5Signal,
   };
 
   return NextResponse.json(response);
