@@ -8,6 +8,7 @@ import type {
   LayerNumber,
   PlatformAssessment,
 } from "@/lib/api-types";
+import { FINDING_LABEL, type LayerVerdict } from "@/lib/verdicts";
 import {
   PLATFORMS,
   PLATFORM_LABELS,
@@ -248,6 +249,9 @@ export default function ResultPage({
           {([1, 2, 3, 4, 5] as const).map((layer) => {
             const snap = data.run.layers[layer];
             const isOpen = openLayer === layer;
+            const verdict: LayerVerdict | undefined = data.verdicts.find(
+              (v) => v.layer === layer,
+            );
             const hasEvidence =
               (layer === 1 && data.layer1Signal !== null) ||
               (layer === 2 && data.layer2Signal !== null) ||
@@ -259,12 +263,25 @@ export default function ResultPage({
                   type="button"
                   onClick={() => setOpenLayer(isOpen ? null : layer)}
                   disabled={!hasEvidence}
-                  className="flex flex-col gap-1 py-4 text-left sm:flex-row sm:justify-between sm:gap-8 disabled:cursor-default"
+                  className="flex flex-col gap-2 py-4 text-left disabled:cursor-default"
                 >
-                  <span className="text-gray-100">{LAYER_LABEL[layer]}</span>
-                  <span className="text-gray-400 sm:text-right">
-                    {layerStatusLabel(snap)}
-                  </span>
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8">
+                    <span className="text-gray-100">
+                      {LAYER_LABEL[layer]}
+                    </span>
+                    <span className="text-gray-600 sm:text-right">
+                      {layerStatusLabel(snap)}
+                    </span>
+                  </div>
+                  {verdict ? (
+                    <p className="max-w-prose text-gray-400">
+                      <span className="font-medium uppercase tracking-[0.2em] text-gray-100">
+                        {FINDING_LABEL[verdict.finding]}
+                      </span>
+                      {" — "}
+                      {verdict.headline}
+                    </p>
+                  ) : null}
                 </button>
                 {isOpen && layer === 1 && data.layer1Signal ? (
                   <Layer1Evidence signal={data.layer1Signal} />

@@ -21,6 +21,7 @@ import type { RobotsLayer1Result } from "@/lib/layers/robots";
 import type { L2Result } from "@/lib/layers/declarations";
 import type { L3Result } from "@/lib/layers/cdn";
 import type { L5Result } from "@/lib/layers/common-crawl";
+import { buildLayerVerdicts } from "@/lib/verdicts";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -122,6 +123,12 @@ export async function GET(_: Request, { params }: RouteContext) {
     layer2Signal,
     layer3Signal,
     layer5Signal,
+    verdicts: buildLayerVerdicts({
+      layer1Signal,
+      layer2Signal,
+      layer3Signal,
+      layer5Signal,
+    }),
   };
 
   return NextResponse.json(response);
