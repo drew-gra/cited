@@ -8,8 +8,10 @@ import type {
 import type { RobotsLayer1Result } from "./layers/robots";
 import type { L2Result } from "./layers/declarations";
 import type { L3Result } from "./layers/cdn";
+import type { L4Result } from "./layers/ua-probing";
 import type { L5Result } from "./layers/common-crawl";
 import type { LayerVerdict } from "./verdicts";
+import type { ConfidenceBand } from "./posture";
 
 export type LayerNumber = 1 | 2 | 3 | 4 | 5;
 
@@ -27,6 +29,7 @@ export type PlatformAssessment = {
   searchAccess: AccessState;
   aggregatePosture: AggregatePosture;
   confidence: number;
+  confidenceBand: ConfidenceBand;
 };
 
 export type AssessResponse = {
@@ -46,6 +49,7 @@ export type AssessResponse = {
   layer1Signal: RobotsLayer1Result | null;
   layer2Signal: L2Result | null;
   layer3Signal: L3Result | null;
+  layer4Signal: L4Result | null;
   layer5Signal: L5Result | null;
   verdicts: LayerVerdict[];
 };

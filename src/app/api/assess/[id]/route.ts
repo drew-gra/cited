@@ -20,8 +20,10 @@ import type { AiPlatform } from "@/lib/ai-platforms";
 import type { RobotsLayer1Result } from "@/lib/layers/robots";
 import type { L2Result } from "@/lib/layers/declarations";
 import type { L3Result } from "@/lib/layers/cdn";
+import type { L4Result } from "@/lib/layers/ua-probing";
 import type { L5Result } from "@/lib/layers/common-crawl";
 import { buildLayerVerdicts } from "@/lib/verdicts";
+import { confidenceBand } from "@/lib/posture";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -89,6 +91,8 @@ export async function GET(_: Request, { params }: RouteContext) {
     (latestPerLayer.get(2)?.signalValue as L2Result | undefined) ?? null;
   const layer3Signal =
     (latestPerLayer.get(3)?.signalValue as L3Result | undefined) ?? null;
+  const layer4Signal =
+    (latestPerLayer.get(4)?.signalValue as L4Result | undefined) ?? null;
   const layer5Signal =
     (latestPerLayer.get(5)?.signalValue as L5Result | undefined) ?? null;
 
@@ -118,15 +122,18 @@ export async function GET(_: Request, { params }: RouteContext) {
       searchAccess: a.searchAccess as AccessState,
       aggregatePosture: a.aggregatePosture as AggregatePosture,
       confidence: a.confidence,
+      confidenceBand: confidenceBand(a.confidence),
     })),
     layer1Signal,
     layer2Signal,
     layer3Signal,
+    layer4Signal,
     layer5Signal,
     verdicts: buildLayerVerdicts({
       layer1Signal,
       layer2Signal,
       layer3Signal,
+      layer4Signal,
       layer5Signal,
     }),
   };

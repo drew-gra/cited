@@ -11,7 +11,7 @@ import { inngest } from "@/lib/inngest/client";
 // only short-circuits when every one of these has a fresh signal AND the
 // most-recent run has all of them marked done (not skipped). Add layers
 // here as they ship.
-const IMPLEMENTED_LAYERS = [1, 2, 3, 5] as const;
+const IMPLEMENTED_LAYERS = [1, 2, 3, 4, 5] as const;
 
 const bodySchema = z.object({
   url: z.string().min(1),
@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
           eq(assessmentRuns.layer1Status, "done"),
           eq(assessmentRuns.layer2Status, "done"),
           eq(assessmentRuns.layer3Status, "done"),
+          eq(assessmentRuns.layer4Status, "done"),
           eq(assessmentRuns.layer5Status, "done"),
         ),
       )
@@ -135,9 +136,8 @@ export async function POST(req: NextRequest) {
 
   // Pre-mark layers as "done" for layers we're reusing from prior runs; the
   // Inngest workflow will transition the layers in layersToRun through
-  // running → done. L4 is not yet implemented, so it stays "skipped."
+  // running → done.
   const layerInitialStatus = (layer: 1 | 2 | 3 | 4 | 5) => {
-    if (layer === 4) return "skipped" as const;
     if (layersToRun.includes(layer)) return "pending" as const;
     return "done" as const;
   };

@@ -15,6 +15,7 @@
 import type { RobotsLayer1Result } from "./layers/robots";
 import type { L2Result } from "./layers/declarations";
 import type { L3Result } from "./layers/cdn";
+import type { L4Result } from "./layers/ua-probing";
 import type { L5Result } from "./layers/common-crawl";
 
 export type LayerNumber = 1 | 2 | 3 | 4 | 5;
@@ -242,16 +243,96 @@ export function verdictForLayer3(signal: L3Result | null): LayerVerdict {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 4 — UA probing (not yet implemented)
+// Layer 4 — UA probing
 // ---------------------------------------------------------------------------
 
-export function verdictForLayer4(): LayerVerdict {
+export function verdictForLayer4(signal: L4Result | null): LayerVerdict {
+  if (!signal) {
+    return {
+      layer: 4,
+      status: "no_data",
+      finding: "inconclusive",
+      headline: "No Layer 4 evidence available.",
+      confidence: "low",
+    };
+  }
+
+  if (signal.status === "no_urls") {
+    return {
+      layer: 4,
+      status: "ok",
+      finding: "inconclusive",
+      headline: "Could not discover any article URLs to probe.",
+      confidence: "low",
+    };
+  }
+
+  if (signal.status === "baseline_failed") {
+    return {
+      layer: 4,
+      status: "ok",
+      finding: "inconclusive",
+      headline:
+        "Baseline crawler also blocked at the edge — L3 evidence applies.",
+      confidence: "low",
+    };
+  }
+
+  if (signal.status === "error") {
+    return {
+      layer: 4,
+      status: "error",
+      finding: "inconclusive",
+      headline: `Layer 4 probing failed (${signal.errorMessage ?? "unknown error"}).`,
+      confidence: "low",
+    };
+  }
+
+  const decisive = signal.perBot.filter(
+    (b) => b.aggregate === "allowed" || b.aggregate === "blocked",
+  );
+  const mixed = signal.perBot.filter((b) => b.aggregate === "mixed");
+  const allowed = signal.perBot.filter((b) => b.aggregate === "allowed");
+  const blocked = signal.perBot.filter((b) => b.aggregate === "blocked");
+
+  if (decisive.length === 0 && mixed.length === 0) {
+    return {
+      layer: 4,
+      status: "ok",
+      finding: "inconclusive",
+      headline:
+        "Probes completed but no bot produced enough successful fetches to decide.",
+      confidence: "low",
+    };
+  }
+
+  if (allowed.length === signal.perBot.length) {
+    return {
+      layer: 4,
+      status: "ok",
+      finding: "permissive",
+      headline: "All assessed AI bots receive the same content as a browser.",
+      confidence: "high",
+    };
+  }
+
+  if (blocked.length === signal.perBot.length) {
+    return {
+      layer: 4,
+      status: "ok",
+      finding: "restrictive",
+      headline:
+        "All assessed AI bots are blocked or served substantially different content than a browser.",
+      confidence: "high",
+    };
+  }
+
   return {
     layer: 4,
-    status: "no_data",
-    finding: "inconclusive",
-    headline: "Layer 4 (UA probing) not yet implemented.",
-    confidence: "low",
+    status: "ok",
+    finding: "mixed",
+    headline: `${allowed.length} AI bot${allowed.length === 1 ? "" : "s"} allowed, ${blocked.length} blocked at the server.`,
+    confidence: "high",
   };
 }
 
@@ -320,13 +401,14 @@ export function buildLayerVerdicts(args: {
   layer1Signal: RobotsLayer1Result | null;
   layer2Signal: L2Result | null;
   layer3Signal: L3Result | null;
+  layer4Signal: L4Result | null;
   layer5Signal: L5Result | null;
 }): LayerVerdict[] {
   return [
     verdictForLayer1(args.layer1Signal),
     verdictForLayer2(args.layer2Signal),
     verdictForLayer3(args.layer3Signal),
-    verdictForLayer4(),
+    verdictForLayer4(args.layer4Signal),
     verdictForLayer5(args.layer5Signal),
   ];
 }

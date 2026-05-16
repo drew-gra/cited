@@ -43,15 +43,21 @@ function postureSentence(
 ): string {
   switch (posture) {
     case "open":
-      return "Bots for this platform are not blocked at the robots.txt layer.";
+      return "AI bots for this platform are not blocked across the layers we tested.";
     case "blocked":
-      return "Bots for this platform are explicitly disallowed at the robots.txt layer.";
+      return "AI bots for this platform are blocked or restricted somewhere in the stack.";
     case "mixed":
-      return "Some bots for this platform are allowed; others are blocked.";
+      return "Some bots for this platform are allowed; others are blocked or restricted.";
     case "unknown":
-      return "Insufficient data to determine posture.";
+      return "Not enough evidence across the layers to determine posture.";
   }
 }
+
+const CONFIDENCE_LABEL: Record<PlatformAssessment["confidenceBand"], string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "—";
@@ -223,6 +229,9 @@ export default function ResultPage({
                         {POSTURE_LABEL[a.aggregatePosture]}
                       </span>
                       <span>{postureSentence(a.aggregatePosture)}</span>
+                      <span className="text-gray-600">
+                        Confidence: {CONFIDENCE_LABEL[a.confidenceBand]}
+                      </span>
                     </span>
                   ) : (
                     <span className="text-gray-600">Pending</span>
@@ -256,6 +265,7 @@ export default function ResultPage({
               (layer === 1 && data.layer1Signal !== null) ||
               (layer === 2 && data.layer2Signal !== null) ||
               (layer === 3 && data.layer3Signal !== null) ||
+              (layer === 4 && data.layer4Signal !== null) ||
               (layer === 5 && data.layer5Signal !== null);
             return (
               <li key={layer} className="flex flex-col">
@@ -291,6 +301,9 @@ export default function ResultPage({
                 ) : null}
                 {isOpen && layer === 3 && data.layer3Signal ? (
                   <Layer3Evidence signal={data.layer3Signal} />
+                ) : null}
+                {isOpen && layer === 4 && data.layer4Signal ? (
+                  <Layer4Evidence signal={data.layer4Signal} />
                 ) : null}
                 {isOpen && layer === 5 && data.layer5Signal ? (
                   <Layer5Evidence signal={data.layer5Signal} />
@@ -492,6 +505,144 @@ function Layer3Evidence({
           </ul>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function Layer4Evidence({
+  signal,
+}: {
+  signal: NonNullable<AssessResponse["layer4Signal"]>;
+}) {
+  const sourceLabel: Record<typeof signal.sampleSource, string> = {
+    sitemap: "Sitemap",
+    rss: "RSS / Atom feed",
+    homepage: "Homepage scrape",
+    none: "—",
+  };
+  const aggregateLabel: Record<
+    (typeof signal.perBot)[number]["aggregate"],
+    string
+  > = {
+    allowed: "Allowed",
+    blocked: "Blocked",
+    mixed: "Mixed",
+    unknown: "Unknown",
+  };
+
+  if (signal.status === "no_urls") {
+    return (
+      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+        <p className="text-gray-400">
+          Could not discover any article URLs to probe. We tried /sitemap.xml,
+          common alternates, RSS, and homepage scraping.
+        </p>
+      </div>
+    );
+  }
+
+  if (signal.status === "baseline_failed") {
+    return (
+      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
+        <p className="text-gray-400">
+          The baseline browser user agent was also blocked or unreachable on
+          every sampled URL, so we can&apos;t tell whether AI bots are being
+          treated differently. The Layer 3 (CDN / WAF) evidence is what
+          applies here.
+        </p>
+        {signal.sampleUrls.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+              URLs attempted
+            </span>
+            <ul className="flex flex-col gap-1 text-gray-400">
+              {signal.sampleUrls.map((u) => (
+                <li key={u} className="break-all">
+                  {u}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6 border-t border-gray-700 py-6">
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Sample source
+        </span>
+        <span className="text-gray-100">
+          {sourceLabel[signal.sampleSource]}
+          {signal.sampleSourceUrl ? ` — ${signal.sampleSourceUrl}` : ""}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Per-bot verdict
+        </span>
+        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
+          {signal.perBot.map((bot) => (
+            <li
+              key={bot.ua}
+              className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
+            >
+              <span className="text-gray-100">{bot.ua}</span>
+              <span className="text-gray-400 sm:text-right">
+                {aggregateLabel[bot.aggregate]}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          URLs probed
+        </span>
+        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
+          {signal.sampleUrls.map((url) => {
+            const baseline = signal.probes.find(
+              (p) => p.isBaseline && p.url === url,
+            );
+            const bots = signal.probes.filter(
+              (p) => !p.isBaseline && p.url === url,
+            );
+            return (
+              <li key={url} className="flex flex-col gap-2 py-3">
+                <span className="break-all text-gray-100">{url}</span>
+                <div className="flex flex-col gap-1 text-gray-400">
+                  <span>
+                    <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+                      baseline
+                    </span>{" "}
+                    {baseline?.statusCode ?? "error"}
+                    {baseline?.responseSizeBytes !== undefined &&
+                    baseline?.responseSizeBytes !== null
+                      ? ` · ${baseline.responseSizeBytes}B`
+                      : ""}
+                  </span>
+                  {bots.map((b) => (
+                    <span key={b.userAgent}>
+                      <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+                        {b.userAgent}
+                      </span>{" "}
+                      {b.statusCode ?? "error"}
+                      {b.responseSizeBytes !== undefined &&
+                      b.responseSizeBytes !== null
+                        ? ` · ${b.responseSizeBytes}B`
+                        : ""}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }

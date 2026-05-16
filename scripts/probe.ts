@@ -11,6 +11,8 @@
 
 import { fetchAndParseRobots } from "../src/lib/layers/robots";
 import { fetchL2 } from "../src/lib/layers/declarations";
+import { findSampleArticleUrls } from "../src/lib/layers/sitemap";
+import { fetchL4Probes } from "../src/lib/layers/ua-probing";
 import {
   PLATFORMS,
   PLATFORM_LABELS,
@@ -262,29 +264,102 @@ function printL2BriefHeader() {
   console.log("-".repeat(34 + 1 + 26 + 1 + 30 + 1 + 28 + 1 + 20));
 }
 
+async function probeL4Detailed(domain: string) {
+  const root = normalizeDomain(domain);
+  console.log(`\n${"=".repeat(72)}`);
+  console.log(`  ${root}`);
+  console.log("=".repeat(72));
+
+  const sample = await findSampleArticleUrls(root);
+  console.log(
+    `  discovery: source=${sample.source}${sample.sourceUrl ? ` (${sample.sourceUrl})` : ""}, urls=${sample.urls.length}`,
+  );
+  for (const u of sample.urls) console.log(`    - ${u}`);
+
+  if (sample.urls.length === 0) {
+    console.log(`  → no URLs to probe; L4 verdict: inconclusive`);
+    return;
+  }
+
+  const startedAt = Date.now();
+  const result = await fetchL4Probes(root, sample);
+  const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`  probed in ${elapsedSec}s, status=${result.status}`);
+
+  for (const bot of result.perBot) {
+    const perUrlOutcomes = bot.perUrl
+      .map((c) => c.outcome.padEnd(16))
+      .join(" ");
+    console.log(
+      `    ${bot.ua.padEnd(22)} ${bot.purpose.padEnd(10)} ${bot.aggregate.padEnd(8)}  ${perUrlOutcomes}`,
+    );
+  }
+
+  console.log("\n  raw probes:");
+  for (const url of result.sampleUrls) {
+    const baseline = result.probes.find((p) => p.isBaseline && p.url === url);
+    console.log(`    ${url}`);
+    console.log(
+      `      ${"baseline".padEnd(22)} status=${baseline?.statusCode ?? "ERR"} size=${baseline?.responseSizeBytes ?? "—"}B`,
+    );
+    for (const p of result.probes.filter(
+      (q) => !q.isBaseline && q.url === url,
+    )) {
+      console.log(
+        `      ${p.userAgent.padEnd(22)} status=${p.statusCode ?? "ERR"} size=${p.responseSizeBytes ?? "—"}B`,
+      );
+    }
+  }
+}
+
+async function probeL4Brief(domain: string) {
+  const root = normalizeDomain(domain);
+  const sample = await findSampleArticleUrls(root);
+  if (sample.urls.length === 0) {
+    console.log(`${root.padEnd(34)} no-urls`);
+    return;
+  }
+  const result = await fetchL4Probes(root, sample);
+  if (result.status === "baseline_failed") {
+    console.log(`${root.padEnd(34)} baseline-blocked`);
+    return;
+  }
+  const cells = result.perBot
+    .map((b) => `${b.ua}=${b.aggregate}`)
+    .join(" ");
+  console.log(`${root.padEnd(34)} ${result.status.padEnd(16)} ${cells}`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const brief = args.includes("--brief");
   const l2 = args.includes("--l2");
-  const domains = args.filter((a) => a !== "--brief" && a !== "--l2");
+  const l4 = args.includes("--l4");
+  const domains = args.filter(
+    (a) => a !== "--brief" && a !== "--l2" && a !== "--l4",
+  );
 
   if (domains.length === 0) {
     console.error(
-      "Usage: npx tsx scripts/probe.ts [--brief] [--l2] <domain> [<domain> ...]\n" +
+      "Usage: npx tsx scripts/probe.ts [--brief] [--l2|--l4] <domain> [<domain> ...]\n" +
         "  default              L1 detailed (per-outlet block)\n" +
         "  --brief              L1 compact one-line table\n" +
         "  --l2                 L2 detailed (per-outlet block)\n" +
-        "  --l2 --brief         L2 compact one-line table",
+        "  --l2 --brief         L2 compact one-line table\n" +
+        "  --l4                 L4 detailed (per-outlet probe; ~60s/domain)\n" +
+        "  --l4 --brief         L4 compact one-line per-bot summary",
     );
     process.exit(1);
   }
 
   if (l2 && brief) printL2BriefHeader();
-  else if (brief) printBriefHeader();
+  else if (brief && !l4) printBriefHeader();
 
   for (const domain of domains) {
     try {
-      if (l2 && brief) await probeL2Brief(domain);
+      if (l4 && brief) await probeL4Brief(domain);
+      else if (l4) await probeL4Detailed(domain);
+      else if (l2 && brief) await probeL2Brief(domain);
       else if (l2) await probeL2Detailed(domain);
       else if (brief) await probeBrief(domain);
       else await probe(domain);

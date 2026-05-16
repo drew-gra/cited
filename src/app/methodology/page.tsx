@@ -23,9 +23,9 @@ export default function MethodologyPage() {
           so you can replicate the work yourself.
         </p>
         <p className="max-w-prose text-gray-400">
-          v1 of Cited implements Layer 1 in production. Layers 2–5 are next on
-          the build list. Their methodology is described below as a contract:
-          this is what they will do when they ship.
+          v1 of Cited implements Layers 1–5 in production. Layer 6 (external
+          dataset cross-reference) and Layer 7 (end-to-end product probing)
+          are out of scope for v1 and described below.
         </p>
       </header>
 
@@ -56,10 +56,11 @@ export default function MethodologyPage() {
 
       <Section
         title="Layer 4 — User-agent A/B probing"
-        status="Coming soon"
+        status="Live"
         body={[
-          "We pull a small sample of recent articles from the sitemap, fetch each with a baseline browser user agent, then refetch as each AI bot's canonical user agent. Differential responses (different status codes, different sizes, different content hashes) indicate active blocking even when robots.txt allows the bot.",
-          "We respect a one-request-per-second-per-domain politeness rule throughout this layer.",
+          "We pull a small sample of recent articles from the sitemap (or, when no sitemap is available, from the RSS feed or homepage anchors), fetch each with a baseline browser user agent, then refetch as each AI bot's canonical user agent. Differential responses — different status codes, substantially different response sizes, or non-matching content hashes — indicate active blocking even when robots.txt allows the bot.",
+          "We respect a one-request-per-second-per-domain politeness rule throughout this layer. This is the one layer where we deliberately do not honor the target's robots.txt: the purpose is to measure what AI bots actually experience at the server, not what the file claims.",
+          "When the baseline browser user agent is also blocked at the edge, Layer 4 reports inconclusive — what's blocking is then a CDN-level rule and the Layer 3 evidence is what applies.",
         ]}
       />
 

@@ -6,39 +6,26 @@ import {
   assessments,
   signals,
   assessmentRuns,
-  type AccessState,
-  type AggregatePosture,
+  probeLog,
 } from "../db/schema";
 import { fetchAndParseRobots } from "../layers/robots";
 import type { RobotsLayer1Result } from "../layers/robots";
 import { fetchL2 } from "../layers/declarations";
+import type { L2Result } from "../layers/declarations";
 import { detectCdn } from "../layers/cdn";
+import type { L3Result } from "../layers/cdn";
 import { fetchCommonCrawlPresence } from "../layers/common-crawl";
-import { TTL_SECONDS } from "../policy";
-import { PLATFORMS, type AiPlatform } from "../ai-platforms";
-
-function summarizeAccess(states: AccessState[]): AccessState {
-  if (states.length === 0) return "unknown";
-  if (states.every((s) => s === "allowed")) return "allowed";
-  if (states.every((s) => s === "blocked")) return "blocked";
-  return "unknown";
-}
-
-// Slice 0/1 posture rule. The full rule table that incorporates L2+L3+L4+L5
-// evidence lands in S4. For now, posture is derived from Layer 1 only.
-function derivePosture(
-  training: AccessState,
-  realtime: AccessState,
-  search: AccessState,
-): AggregatePosture {
-  const known = [training, realtime, search].filter(
-    (s): s is "allowed" | "blocked" => s !== "unknown",
-  );
-  if (known.length === 0) return "unknown";
-  if (known.every((s) => s === "allowed")) return "open";
-  if (known.every((s) => s === "blocked")) return "blocked";
-  return "mixed";
-}
+import type { L5Result } from "../layers/common-crawl";
+import { findSampleArticleUrls } from "../layers/sitemap";
+import {
+  probeUrl,
+  summarizeL4,
+  type L4Probe,
+  type L4Result,
+} from "../layers/ua-probing";
+import { BASELINE_USER_AGENT, TTL_SECONDS } from "../policy";
+import { BOTS } from "../ai-platforms";
+import { derivePostures } from "../posture";
 
 export const assessOutlet = inngest.createFunction(
   {
@@ -63,7 +50,7 @@ export const assessOutlet = inngest.createFunction(
       layersToRun?: number[];
     };
     const { runId, outletId, rootDomain } = data;
-    const layersToRun = new Set(data.layersToRun ?? [1, 2, 3, 5]);
+    const layersToRun = new Set(data.layersToRun ?? [1, 2, 3, 4, 5]);
 
     await step.run("mark-running", () =>
       db
@@ -179,6 +166,74 @@ export const assessOutlet = inngest.createFunction(
       });
     }
 
+    // ----- Layer 4: User-agent A/B probing -----
+    // The most expensive layer: up to 50 fetches per outlet, serialized at
+    // ~1/sec per domain. Each fetch is its own step.run so Inngest memoizes
+    // successful results across retries; step.sleep between fetches enforces
+    // the politeness window (Inngest's function-level throttle only spaces
+    // out invocations, not work within one invocation).
+    if (layersToRun.has(4)) {
+      await step.run("mark-l4-running", () =>
+        db
+          .update(assessmentRuns)
+          .set({ layer4Status: "running", updatedAt: new Date() })
+          .where(eq(assessmentRuns.id, runId)),
+      );
+
+      const sample = await step.run("layer-4-discover", () =>
+        findSampleArticleUrls(rootDomain),
+      );
+
+      const probes: L4Probe[] = [];
+      let first = true;
+      for (let i = 0; i < sample.urls.length; i++) {
+        if (!first) {
+          await step.sleep(`l4-sleep-baseline-${i}`, "1s");
+        }
+        first = false;
+        const baseline = await step.run(`l4-probe-${i}-baseline`, () =>
+          probeUrl(sample.urls[i], BASELINE_USER_AGENT, true),
+        );
+        probes.push(baseline);
+
+        for (let j = 0; j < BOTS.length; j++) {
+          await step.sleep(`l4-sleep-${i}-${j}`, "1s");
+          const probe = await step.run(`l4-probe-${i}-${j}`, () =>
+            probeUrl(sample.urls[i], BOTS[j].ua, false),
+          );
+          probes.push(probe);
+        }
+      }
+
+      const l4Result = summarizeL4({ rootDomain, sample, probes });
+
+      await step.run("layer-4-persist", async () => {
+        if (probes.length > 0) {
+          await db.insert(probeLog).values(
+            probes.map((p) => ({
+              outletId,
+              sampleUrl: p.url,
+              userAgent: p.userAgent,
+              statusCode: p.statusCode,
+              responseSize: p.responseSizeBytes,
+              responseHash: p.contentHash,
+            })),
+          );
+        }
+        await db.insert(signals).values({
+          outletId,
+          layer: 4,
+          signalType: "ua_probing",
+          signalValue: l4Result,
+          ttlSeconds: TTL_SECONDS.layer4,
+        });
+        await db
+          .update(assessmentRuns)
+          .set({ layer4Status: "done", updatedAt: new Date() })
+          .where(eq(assessmentRuns.id, runId));
+      });
+    }
+
     // ----- Layer 5: Common Crawl presence -----
     if (layersToRun.has(5)) {
       await step.run("mark-l5-running", () =>
@@ -207,57 +262,49 @@ export const assessOutlet = inngest.createFunction(
       });
     }
 
-    // ----- Compute per-platform assessments -----
-    // Read the most recent Layer 1 signal from the DB rather than relying
-    // on a step-local variable; with surgical refresh, L1 may have been
-    // reused from a prior run and not refetched in this invocation.
+    // ----- Compute per-platform assessments (S4b rule table) -----
+    // Read latest signals for all five layers from the DB rather than
+    // step-local variables; with surgical refresh, any subset of the
+    // layers may have been reused from a prior run rather than refetched
+    // in this invocation. The rule logic lives in src/lib/posture.ts.
     await step.run("compute-postures", async () => {
-      const [latestL1] = await db
-        .select()
-        .from(signals)
-        .where(and(eq(signals.outletId, outletId), eq(signals.layer, 1)))
-        .orderBy(desc(signals.capturedAt))
-        .limit(1);
-      if (!latestL1) return;
-      const robotsResult = latestL1.signalValue as RobotsLayer1Result;
+      const latestForLayer = async <T>(layer: number): Promise<T | null> => {
+        const [row] = await db
+          .select()
+          .from(signals)
+          .where(and(eq(signals.outletId, outletId), eq(signals.layer, layer)))
+          .orderBy(desc(signals.capturedAt))
+          .limit(1);
+        return row ? (row.signalValue as T) : null;
+      };
 
-      const platformRows = PLATFORMS.map((platform: AiPlatform) => {
-        const platformBots = robotsResult.perBot.filter(
-          (b) => b.platform === platform,
-        );
-        const trainingAccess = summarizeAccess(
-          platformBots
-            .filter((b) => b.purpose === "training")
-            .map((b) => b.rootAccess),
-        );
-        const realtimeAccess = summarizeAccess(
-          platformBots
-            .filter((b) => b.purpose === "realtime")
-            .map((b) => b.rootAccess),
-        );
-        const searchAccess = summarizeAccess(
-          platformBots
-            .filter((b) => b.purpose === "search")
-            .map((b) => b.rootAccess),
-        );
-        return {
-          outletId,
-          assessmentRunId: runId,
-          aiPlatform: platform,
-          trainingAccess,
-          realtimeAccess,
-          searchAccess,
-          aggregatePosture: derivePosture(
-            trainingAccess,
-            realtimeAccess,
-            searchAccess,
-          ),
-          // Slice S2 stub: bump to 70 (L1+L2+L3+L5). Replaced by real
-          // scoring when the rule table lands in S4.
-          confidence: 70,
-        };
+      const [l1, l2, l3, l4, l5] = await Promise.all([
+        latestForLayer<RobotsLayer1Result>(1),
+        latestForLayer<L2Result>(2),
+        latestForLayer<L3Result>(3),
+        latestForLayer<L4Result>(4),
+        latestForLayer<L5Result>(5),
+      ]);
+
+      const postures = derivePostures({
+        layer1Signal: l1,
+        layer2Signal: l2,
+        layer3Signal: l3,
+        layer4Signal: l4,
+        layer5Signal: l5,
       });
-      await db.insert(assessments).values(platformRows);
+
+      const rows = postures.map((p) => ({
+        outletId,
+        assessmentRunId: runId,
+        aiPlatform: p.platform,
+        trainingAccess: p.trainingAccess,
+        realtimeAccess: p.realtimeAccess,
+        searchAccess: p.searchAccess,
+        aggregatePosture: p.aggregatePosture,
+        confidence: p.confidence,
+      }));
+      if (rows.length > 0) await db.insert(assessments).values(rows);
     });
 
     // ----- Finalize -----
