@@ -1,5 +1,9 @@
 # Cited
 
+> Source is public for transparency about Cited's methodology.
+> (c) 2026 Bread & Law, LLC. All rights reserved.
+> Contact newbiz at breadandlaw dot com with business or licensing inquiries.
+
 Public per-AI-platform accessibility checker for news outlets, by Bread & Law. Lives at **breadandlaw.com/cited** in production.
 
 A user pastes a news outlet or article URL. Cited assesses whether that domain is accessible to OpenAI / Anthropic / Google / Perplexity / Common Crawl across training, real-time retrieval, and AI-powered search — and shows its work for every layer.
@@ -20,19 +24,21 @@ A user pastes a news outlet or article URL. Cited assesses whether that domain i
 
 Inngest's `assessOutlet` function runs each layer as a `step.run`, persisting raw evidence into `signals` (with TTL) and per-platform results into `assessments`. A throttle keyed on `event.data.rootDomain` enforces the politeness rule of one outbound request per second per target domain.
 
-`GET /api/assess/:id` returns the run's status, per-layer freshness, the five per-platform assessments, and the raw Layer 1 signal so the result page can render the drilldown.
+`GET /api/assess/:id` returns the run's status, per-layer freshness, the five per-platform assessments (with `confidenceBand` derived on read), the raw per-layer signals, and the per-layer verdicts (also computed on read) so the result page can render the drilldown.
 
 The result page (`/assess/:id`) is a client component that polls every 2s while the run is `pending` or `running`, then renders top-line + drilldown.
 
-## v1 scope (slice 0 = Layer 1 only)
+## v1 layers
 
 | Layer | Status | What it does |
 |---|---|---|
-| 1 — robots.txt | **Live** | Fetch and parse `/robots.txt` against the v1 AI bot list, surface per-bot allow/disallow with matched rule and line number. |
-| 2 — HTTP / HTML declarations | Pending | `X-Robots-Tag`, `<meta name="robots">`, `llms.txt`, IPTC `dataMining`. |
-| 3 — Infrastructure fingerprint | Pending | CDN/WAF detection from response headers. |
-| 4 — User-agent A/B probing | Pending | Sample 3–5 articles from sitemap, probe each with the AI bot UAs, diff responses. |
-| 5 — Common Crawl presence | Pending | Query the CDX index across the last 6 monthly snapshots. |
+| 1 — robots.txt | **Live** | Fetch and parse `/robots.txt` against the v1 AI bot list; surface per-bot allow/disallow with matched rule and line number. Also detects hosting platform (Beehiiv / Substack / Ghost / WordPress / Wix). |
+| 2 — HTTP / HTML declarations | **Live** | `X-Robots-Tag`, `<meta name="robots">`, AI-bot-specific meta tags, and `/llms.txt` with content-type validation. |
+| 3 — Infrastructure fingerprint | **Live** | CDN / WAF detection from response headers; identifies Cloudflare / CloudFront / Fastly / Akamai / Vercel / Netlify / Imperva / Sucuri. Derives from L2's captured headers — no extra fetch. |
+| 4 — User-agent A/B probing | **Live** | Discover 5 article URLs (sitemap → RSS → homepage scrape), fetch each with a baseline browser UA and with each AI bot UA at 1 req/sec/domain, compare status / size / SHA-256 hash of the first 200KB. |
+| 5 — Common Crawl presence | **Live** | Query the CDX index across the last six monthly CC-MAIN snapshots; bucket coverage and compute a guard-railed trend. |
+
+Each layer's raw evidence runs through a per-layer translator that produces a uniform `LayerVerdict` (`permissive` / `restrictive` / `mixed` / `contextual` / `inconclusive`). The S4b posture rule combines those verdicts into per-platform `training_access` / `realtime_access` / `search_access` / `aggregate_posture` plus a confidence integer (0–100) with a derived band (low / medium / high). Server reality (L4) overrides publisher claim (L1) on disagreement; L3 and L5 affect confidence only.
 
 Layers 6 (external dataset cross-reference) and 7 (end-to-end product probing) are post-v1; the schema accommodates them now (`known_relationships` table is empty in v1).
 
@@ -122,7 +128,11 @@ This sends `breadandlaw.com/cited/*` to this app while leaving the rest of the m
 
 ## Politeness
 
-Outbound fetches identify as `AICitabilityBot/1.0 (+https://breadandlaw.com/cited)`. The Inngest function is throttled to one outbound request per second per target domain. Layer 4 will additionally honor any `Crawl-delay` directive in the target's robots.txt.
+Outbound fetches identify in two ways. Layers 1, 2, 3, and 5 use `AICitabilityBot/1.0 (+https://breadandlaw.com/cited)` as an honest crawler identifier. Layer 4 uses a baseline browser UA for sitemap / article-URL discovery (so WAFs keyed on bot-string patterns don't false-negative discovery before the comparison phase runs) and then fetches each sample URL once with that baseline browser UA and once with each of the canonical AI bot UAs (`GPTBot`, `ChatGPT-User`, `OAI-SearchBot`, `ClaudeBot`, `Claude-User`, `Claude-SearchBot`, `Google-Extended`, `PerplexityBot`, `Perplexity-User`, `CCBot`) to measure what those bots actually experience.
+
+All fetches to the same target domain are serialized at one request per second. The Inngest function uses a `rootDomain`-keyed throttle to space invocations; Layer 4 additionally uses `step.sleep("1s")` between fetches within an invocation, since throttling cannot enforce intra-invocation politeness.
+
+Layer 4 is the one layer where we deliberately do not honor the target's robots.txt: its purpose is to measure whether the publisher's stated policy matches the server's actual behavior, which requires fetching as the bot UAs would, including ones disallowed in robots.txt.
 
 ## Design
 
@@ -130,11 +140,9 @@ Outbound fetches identify as `AICitabilityBot/1.0 (+https://breadandlaw.com/cite
 
 ## What's deferred
 
-- **Posture aggregation rule table** — slice 0 uses a placeholder rule (open if all known, blocked if all blocked, mixed if split). The full rule table lands with S4.
-- **Confidence scoring** — slice 0 hard-codes 30 (one layer ran, no agreement check possible). Real scoring lands with S4.
-- **Common Crawl coverage threshold** — TBD, lands with S2.
-- **Anthropic `Claude-SearchBot` UA** — name needs verification against Anthropic's published docs before Layer 4 ships.
-- **Sample-URL selection heuristic for Layer 4** — 2 most-recent articles + N-2 random, with sitemap → sitemap-index → RSS → homepage-extraction fallback.
-- **Non-news input handling** — accepted in v1, no gatekeeping. A "this isn't a news outlet" classifier (curated list + Wikidata `instance of: news organization` + warning) lands post-v1.
-- **`ai-content-declaration` parsing** — Layer 2 will parse against the IPTC `dataMining` field as the most-cited convention.
-- **Methodology copy** — drafted in `/methodology`, awaiting your edits.
+- **Layer 6 — External dataset cross-reference.** Schema-supported (`known_relationships` table), empty in v1. Will pull from licensing-deal trackers, lawsuit filings, AI-publisher coalitions.
+- **Layer 7 — End-to-end product probing.** Querying actual AI assistants for verifiable answers about the outlet. Post-v1.
+- **JS-challenge handling.** Sites behind a Cloudflare *managed challenge* (JS-based, not just UA-keyed — e.g. mjbizdaily.com) block both the bot UA and the baseline browser UA, because solving the challenge requires running JS that `fetch()` doesn't. For those L4 reports `inconclusive` and L3's CDN evidence carries the load. The S4b posture rule has an explicit edge-block path that maps this evidence pattern to `blocked` rather than `unknown`. Headless-browser probing (Playwright or similar) to actually solve the challenges is post-v1.
+- **Per-platform confidence granularity.** S4b's confidence is currently computed site-wide (bot-level agreement counts across all bots). Refining to per-platform agreement counts is post-v1.
+- **Anthropic `Claude-SearchBot` UA.** Name still needs verification against Anthropic's published docs.
+- **Non-news input handling.** Accepted today without gatekeeping. A "this isn't a news outlet" classifier (curated list + Wikidata `instance of: news organization` + warning) is post-v1.
