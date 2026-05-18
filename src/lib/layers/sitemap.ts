@@ -199,7 +199,7 @@ function parseRss(xml: string): SitemapEntry[] {
 }
 
 const NON_ARTICLE_PATH_RE =
-  /\/(?:category|categories|tag|tags|author|authors|page|wp-admin|wp-content|wp-login|wp-json|feed|rss|search|about|contact|privacy|terms|subscribe|login|signup|register|cart|checkout)\b/i;
+  /\/(?:category|categories|tag|tags|author|authors|page|wp-admin|wp-content|wp-login|wp-json|feed|rss|search|about|contact|privacy|terms|subscribe|login|signup|register|cart|checkout|sections?|podcasts?|newsletters?|topics?|series|shows?|channels?|programs?)\b/i;
 const ASSET_EXT_RE =
   /\.(?:css|js|json|jpg|jpeg|png|gif|svg|ico|webp|pdf|xml|zip|gz|mp4|mp3)$/i;
 
@@ -258,9 +258,47 @@ function selectSample(entries: SitemapEntry[]): string[] {
   return [...recent, ...sampled];
 }
 
+function isValidSitemapUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export type FindSampleOptions = {
+  /**
+   * Sitemap URLs declared in robots.txt (`Sitemap:` directives). Tried
+   * before the standard `/sitemap.xml`-style guesses because the publisher
+   * has explicitly told us where their sitemap lives. Required for
+   * publishers like NPR whose sitemaps live at non-standard paths
+   * (`/sitemap_1.xml`, `/sitemap_2.xml`, ...) that our default guesses
+   * would miss.
+   */
+  robotsSitemaps?: string[];
+};
+
 export async function findSampleArticleUrls(
   rootDomain: string,
+  options?: FindSampleOptions,
 ): Promise<SitemapDiscoveryResult> {
+  if (options?.robotsSitemaps) {
+    for (const url of options.robotsSitemaps) {
+      if (!isValidSitemapUrl(url)) continue;
+      const { text } = await fetchTextWithGzip(url);
+      if (!text) continue;
+      const found = await resolveSitemap(text, url, 0);
+      if (found && found.entries.length > 0) {
+        return {
+          urls: selectSample(found.entries),
+          source: "sitemap",
+          sourceUrl: found.sourceUrl,
+        };
+      }
+    }
+  }
+
   for (const path of SITEMAP_PATHS) {
     const found = await discoverViaSitemapPath(rootDomain, path, 0);
     if (found && found.entries.length > 0) {

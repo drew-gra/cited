@@ -180,8 +180,27 @@ export const assessOutlet = inngest.createFunction(
           .where(eq(assessmentRuns.id, runId)),
       );
 
+      // Sitemaps declared in robots.txt take priority over standard-path
+      // guessing in L4's discovery — publishers like NPR put their sitemaps
+      // at non-standard paths that the default chain would miss. L1's
+      // signal already captures these, so we just hand them through.
+      const robotsSitemaps = await step.run(
+        "layer-4-load-robots-sitemaps",
+        async () => {
+          const [latestL1] = await db
+            .select()
+            .from(signals)
+            .where(and(eq(signals.outletId, outletId), eq(signals.layer, 1)))
+            .orderBy(desc(signals.capturedAt))
+            .limit(1);
+          if (!latestL1) return [] as string[];
+          const value = latestL1.signalValue as { sitemaps?: string[] };
+          return value.sitemaps ?? [];
+        },
+      );
+
       const sample = await step.run("layer-4-discover", () =>
-        findSampleArticleUrls(rootDomain),
+        findSampleArticleUrls(rootDomain, { robotsSitemaps }),
       );
 
       const probes: L4Probe[] = [];

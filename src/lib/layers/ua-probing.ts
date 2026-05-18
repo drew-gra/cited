@@ -38,6 +38,25 @@ const MAX_BODY_BYTES = 200 * 1024;
 const SIZE_RATIO_IDENTICAL = 0.05;
 const SIZE_RATIO_STUB_THRESHOLD = 0.85;
 
+// Single retry, applied only to connection-class errors (TCP reset, TLS
+// handshake aborted, etc.). Timeouts skip retry — when a server is
+// deliberately stalling our UA, a second attempt will just stall again
+// and waste another fetchTimeoutMs. This delay is also the politeness
+// budget we burn before retrying the same target.
+const L4_RETRY_BACKOFF_MS = 2_000;
+
+// Tarpit-detection thresholds, used in compareToBaseline. A bot fetch is
+// treated as a stall when (a) its error was a timeout, (b) its duration is
+// within TARPIT_TIMEOUT_PROXIMITY_MS of the fetch timeout (meaning OUR
+// abort fired, not a server-side closure), and (c) the baseline for the
+// same URL was much faster — TARPIT_BASELINE_RATIO_MAX bounds how close
+// baseline duration can get to bot duration before the pattern stops
+// looking like a deliberate stall.
+const TARPIT_TIMEOUT_PROXIMITY_MS = 200;
+const TARPIT_BASELINE_RATIO_MAX = 0.25;
+
+export type L4ErrorKind = "timeout" | "connection" | "other" | null;
+
 export type L4Probe = {
   url: string;
   userAgent: string;
@@ -48,6 +67,7 @@ export type L4Probe = {
   contentHash: string | null;
   errorMessage?: string;
   durationMs: number;
+  errorKind: L4ErrorKind;
 };
 
 export type L4ComparisonOutcome =
@@ -56,6 +76,13 @@ export type L4ComparisonOutcome =
   | "bot_error"
   | "baseline_failed";
 
+// When a comparison's outcome is "blocked", blockMechanism records WHY:
+// - "status" — bot got a 4xx/5xx, or got a 2xx with substantially shorter
+//   content than baseline (soft-paywall / stub).
+// - "stall" — bot fetch timed out while baseline succeeded fast (tarpit).
+// null for any non-blocked outcome.
+export type L4BlockMechanism = "status" | "stall" | null;
+
 export type L4UrlComparison = {
   url: string;
   baselineStatus: number | null;
@@ -63,6 +90,7 @@ export type L4UrlComparison = {
   sizeRatio: number | null;
   hashMatches: boolean;
   outcome: L4ComparisonOutcome;
+  blockMechanism: L4BlockMechanism;
 };
 
 export type L4BotAggregate = "allowed" | "blocked" | "mixed" | "unknown";
@@ -90,18 +118,37 @@ export type L4Result = {
   perBot: L4BotResult[];
 };
 
+type AttemptResult = {
+  statusCode: number | null;
+  finalUrl: string | null;
+  bytesRead: number | null;
+  contentHash: string | null;
+  durationMs: number;
+  errorMessage?: string;
+  errorKind: L4ErrorKind;
+};
+
 /**
- * Fetch a URL with a specific user agent. Reads at most MAX_BODY_BYTES so a
- * single multi-megabyte article doesn't blow out memory across 50 probes.
- * The captured `responseSizeBytes` is the bytes actually read (post-cap);
- * that's consistent across probes so comparison is meaningful, and the cap
- * is well above the typical paywall-stub size we want to detect.
+ * Best-effort classification of a thrown fetch error into a kind we can
+ * branch on. Node's fetch standardizes timeout errors as either DOMException
+ * with name "TimeoutError" / "AbortError" (with AbortSignal.timeout) or as
+ * an Error whose message contains "abort" / "timeout"; everything else
+ * (ECONNRESET, ECONNREFUSED, ENOTFOUND, TLS errors) we lump as "connection"
+ * because the practical decision — whether to retry — is the same for all
+ * of them.
  */
-export async function probeUrl(
-  url: string,
-  ua: string,
-  isBaseline: boolean,
-): Promise<L4Probe> {
+function classifyFetchError(err: unknown): "timeout" | "connection" | "other" {
+  if (err instanceof Error) {
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
+      return "timeout";
+    }
+    if (/abort|timeout/i.test(err.message)) return "timeout";
+    return "connection";
+  }
+  return "other";
+}
+
+async function attemptProbe(url: string, ua: string): Promise<AttemptResult> {
   const startedAt = Date.now();
   try {
     const res = await fetch(url, {
@@ -130,32 +177,76 @@ export async function probeUrl(
     const hash = createHash("sha256").update(buf).digest("hex");
 
     return {
-      url,
-      userAgent: ua,
-      isBaseline,
       statusCode: res.status,
       finalUrl: res.url || url,
-      responseSizeBytes: buf.length,
+      bytesRead: buf.length,
       contentHash: hash,
       durationMs: Date.now() - startedAt,
+      errorKind: null,
     };
   } catch (err) {
     return {
-      url,
-      userAgent: ua,
-      isBaseline,
       statusCode: null,
       finalUrl: null,
-      responseSizeBytes: null,
+      bytesRead: null,
       contentHash: null,
-      errorMessage: err instanceof Error ? err.message : String(err),
       durationMs: Date.now() - startedAt,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      errorKind: classifyFetchError(err),
     };
   }
 }
 
+/**
+ * Fetch a URL with a specific user agent. Reads at most MAX_BODY_BYTES so a
+ * single multi-megabyte article doesn't blow out memory across 50 probes.
+ * The captured `responseSizeBytes` is the bytes actually read (post-cap);
+ * that's consistent across probes so comparison is meaningful, and the cap
+ * is well above the typical paywall-stub size we want to detect.
+ *
+ * On a connection-class failure (TCP reset, TLS error, DNS), attempts a
+ * single retry after L4_RETRY_BACKOFF_MS. Timeout failures skip retry —
+ * see L4_RETRY_BACKOFF_MS rationale.
+ */
+export async function probeUrl(
+  url: string,
+  ua: string,
+  isBaseline: boolean,
+): Promise<L4Probe> {
+  let result = await attemptProbe(url, ua);
+  if (result.statusCode === null && result.errorKind === "connection") {
+    await sleep(L4_RETRY_BACKOFF_MS);
+    result = await attemptProbe(url, ua);
+  }
+  return {
+    url,
+    userAgent: ua,
+    isBaseline,
+    statusCode: result.statusCode,
+    finalUrl: result.finalUrl,
+    responseSizeBytes: result.bytesRead,
+    contentHash: result.contentHash,
+    durationMs: result.durationMs,
+    errorMessage: result.errorMessage,
+    errorKind: result.errorKind,
+  };
+}
+
 function isBaselineOk(p: L4Probe): boolean {
   return p.statusCode !== null && p.statusCode >= 200 && p.statusCode < 400;
+}
+
+function isTarpitPattern(baseline: L4Probe, bot: L4Probe): boolean {
+  if (bot.statusCode !== null) return false;
+  if (bot.errorKind !== "timeout") return false;
+  if (
+    bot.durationMs <
+    POLITENESS.fetchTimeoutMs - TARPIT_TIMEOUT_PROXIMITY_MS
+  ) {
+    return false;
+  }
+  if (bot.durationMs <= 0) return false;
+  return baseline.durationMs <= bot.durationMs * TARPIT_BASELINE_RATIO_MAX;
 }
 
 export function compareToBaseline(
@@ -170,6 +261,23 @@ export function compareToBaseline(
       sizeRatio: null,
       hashMatches: false,
       outcome: "baseline_failed",
+      blockMechanism: null,
+    };
+  }
+  // Tarpit pattern — bot timed out at the fetch limit while baseline reached
+  // the same URL quickly. Server is selectively unresponsive to this UA.
+  // Has to be checked before the general "bot.statusCode === null →
+  // bot_error" fallback so the tarpit case gets credit instead of looking
+  // like network noise.
+  if (isTarpitPattern(baseline, bot)) {
+    return {
+      url: baseline.url,
+      baselineStatus: baseline.statusCode,
+      botStatus: null,
+      sizeRatio: null,
+      hashMatches: false,
+      outcome: "blocked",
+      blockMechanism: "stall",
     };
   }
   if (bot.statusCode === null) {
@@ -180,6 +288,7 @@ export function compareToBaseline(
       sizeRatio: null,
       hashMatches: false,
       outcome: "bot_error",
+      blockMechanism: null,
     };
   }
   if (bot.statusCode >= 400) {
@@ -190,6 +299,7 @@ export function compareToBaseline(
       sizeRatio: null,
       hashMatches: false,
       outcome: "blocked",
+      blockMechanism: "status",
     };
   }
 
@@ -215,6 +325,7 @@ export function compareToBaseline(
       sizeRatio,
       hashMatches: true,
       outcome: "allowed",
+      blockMechanism: null,
     };
   }
 
@@ -227,6 +338,7 @@ export function compareToBaseline(
         sizeRatio,
         hashMatches: false,
         outcome: "allowed",
+        blockMechanism: null,
       };
     }
     if (sizeRatio < SIZE_RATIO_STUB_THRESHOLD) {
@@ -237,6 +349,7 @@ export function compareToBaseline(
         sizeRatio,
         hashMatches: false,
         outcome: "blocked",
+        blockMechanism: "status",
       };
     }
   }
@@ -248,6 +361,7 @@ export function compareToBaseline(
     sizeRatio,
     hashMatches: false,
     outcome: "allowed",
+    blockMechanism: null,
   };
 }
 
@@ -324,6 +438,7 @@ export function summarizeL4(args: {
           sizeRatio: null,
           hashMatches: false,
           outcome: "baseline_failed" as const,
+          blockMechanism: null,
         };
       }
       if (!botProbe) {
@@ -334,6 +449,7 @@ export function summarizeL4(args: {
           sizeRatio: null,
           hashMatches: false,
           outcome: "bot_error" as const,
+          blockMechanism: null,
         };
       }
       return compareToBaseline(baseline, botProbe);

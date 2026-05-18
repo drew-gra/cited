@@ -264,13 +264,26 @@ function printL2BriefHeader() {
   console.log("-".repeat(34 + 1 + 26 + 1 + 30 + 1 + 28 + 1 + 20));
 }
 
+// L4 discovery uses sitemaps declared in robots.txt as its first option.
+// Bench mode fetches robots.txt itself for this; in production the same
+// data lives in L1's persisted signal.
+async function loadRobotsSitemaps(root: string): Promise<string[]> {
+  try {
+    const robots = await fetchAndParseRobots(root);
+    return robots.sitemaps;
+  } catch {
+    return [];
+  }
+}
+
 async function probeL4Detailed(domain: string) {
   const root = normalizeDomain(domain);
   console.log(`\n${"=".repeat(72)}`);
   console.log(`  ${root}`);
   console.log("=".repeat(72));
 
-  const sample = await findSampleArticleUrls(root);
+  const robotsSitemaps = await loadRobotsSitemaps(root);
+  const sample = await findSampleArticleUrls(root, { robotsSitemaps });
   console.log(
     `  discovery: source=${sample.source}${sample.sourceUrl ? ` (${sample.sourceUrl})` : ""}, urls=${sample.urls.length}`,
   );
@@ -314,7 +327,8 @@ async function probeL4Detailed(domain: string) {
 
 async function probeL4Brief(domain: string) {
   const root = normalizeDomain(domain);
-  const sample = await findSampleArticleUrls(root);
+  const robotsSitemaps = await loadRobotsSitemaps(root);
+  const sample = await findSampleArticleUrls(root, { robotsSitemaps });
   if (sample.urls.length === 0) {
     console.log(`${root.padEnd(34)} no-urls`);
     return;

@@ -317,12 +317,29 @@ export function verdictForLayer4(signal: L4Result | null): LayerVerdict {
   }
 
   if (blocked.length === signal.perBot.length) {
+    // Inspect the underlying block mechanism so the headline distinguishes
+    // a flat HTTP-status block from a tarpit (server accepts the
+    // connection but stalls AI bot UAs until our fetch times out). Both
+    // produce "restrictive" but the mechanism is forensically distinct
+    // and worth communicating.
+    let stallCount = 0;
+    let statusCount = 0;
+    for (const bot of signal.perBot) {
+      for (const c of bot.perUrl) {
+        if (c.outcome === "blocked") {
+          if (c.blockMechanism === "stall") stallCount++;
+          else if (c.blockMechanism === "status") statusCount++;
+        }
+      }
+    }
+    const dominantStall = stallCount > 0 && stallCount >= statusCount;
     return {
       layer: 4,
       status: "ok",
       finding: "restrictive",
-      headline:
-        "All assessed AI bots are blocked or served substantially different content than a browser.",
+      headline: dominantStall
+        ? "AI bots stalled at the edge; baseline browser UA reached the server fast."
+        : "All assessed AI bots are blocked or served substantially different content than a browser.",
       confidence: "high",
     };
   }
