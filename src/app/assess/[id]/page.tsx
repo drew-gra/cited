@@ -29,6 +29,12 @@ const LAYER_LABEL: Record<LayerNumber, string> = {
   5: "Layer 5 — Common Crawl presence",
 };
 
+const CONFIDENCE_LABEL: Record<PlatformAssessment["confidenceBand"], string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
 function accessDotColor(
   access: PlatformAssessment["trainingAccess"] | null,
 ): string {
@@ -344,6 +350,9 @@ export default function ResultPage({
                   </span>
                   <span className="text-sm text-gray-600">
                     {purposes.join(" · ")}
+                  </span>
+                  <span className="text-sm text-gray-600">
+                    {a ? `${CONFIDENCE_LABEL[a.confidenceBand]} confidence` : "—"}
                   </span>
                 </div>
               </li>
