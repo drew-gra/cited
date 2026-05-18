@@ -23,7 +23,16 @@
  *      L5 absent or low → training-confidence penalty; L5 high → bump.
  *      L3 detects CDN + L1 permissive + no L4 → silent-block-risk penalty.
  *
- *   4. Confidence is an integer 0–100; a band (low/medium/high) is derived
+ *   4. L4-couldn't-verify penalty. When L4 ran but failed
+ *      (baseline_failed / no_urls / error) AND the edge-block pattern
+ *      doesn't fire, confidence drops to `low`. Without independent
+ *      confirmation, L1 alone shouldn't read as a confident verdict —
+ *      surfaces honestly that the publisher's stated policy is
+ *      unverified rather than endorsed. (See prnewsonline.com case,
+ *      where Vercel's datacenter IPs are blanket-banned by the publisher's
+ *      WAF, so prod can never verify the L1 claim.)
+ *
+ *   5. Confidence is an integer 0–100; a band (low/medium/high) is derived
  *      for display.
  */
 
@@ -118,6 +127,12 @@ export function confidenceBand(score: number): ConfidenceBand {
 type ConfidenceParts = {
   l1HasSignal: boolean;
   l4HasSignal: boolean;
+  // True when L4 ran but couldn't produce a verification (baseline_failed,
+  // no_urls, or error) AND the edge-block pattern didn't fire to claim
+  // that case as evidence in its own right. In this state we have no
+  // independent confirmation of L1's claim — confidence should drop to
+  // `low` so the top-line doesn't read as if L1 alone is sufficient.
+  l4CouldntVerify: boolean;
   agreeCount: number;
   disagreeCount: number;
   edgeBlocked: boolean;
@@ -136,6 +151,7 @@ function computeConfidence(parts: ConfidenceParts): number {
   if (parts.l3HasCdnAndL1PermissiveAndNoL4) score -= 10;
   if (parts.l5HelpsTraining) score += 5;
   if (parts.l5HurtsTraining) score -= 5;
+  if (parts.l4CouldntVerify) score -= 25;
   return Math.max(0, Math.min(100, score));
 }
 
@@ -172,6 +188,14 @@ export function derivePostures(args: PostureInputs): PerPlatformPosture[] {
     !!layer1Signal &&
     (layer1Signal.status === "ok" || layer1Signal.status === "not_found");
   const l4HasSignal = layer4Signal?.status === "ok";
+  // L4 ran but couldn't verify — e.g. publisher's WAF blanket-bans
+  // datacenter IPs (prnewsonline.com pattern), or sample discovery
+  // found no probeable URLs. Only penalize when the edge-block pattern
+  // isn't already firing; that pattern has its own specific story.
+  const l4CouldntVerify =
+    !edgeBlocked &&
+    layer4Signal !== null &&
+    layer4Signal.status !== "ok";
 
   const l3HasCdn = (layer3Signal?.detected.length ?? 0) > 0;
   const l1IsPermissive =
@@ -210,6 +234,7 @@ export function derivePostures(args: PostureInputs): PerPlatformPosture[] {
     const confidence = computeConfidence({
       l1HasSignal,
       l4HasSignal,
+      l4CouldntVerify,
       agreeCount,
       disagreeCount,
       edgeBlocked,
