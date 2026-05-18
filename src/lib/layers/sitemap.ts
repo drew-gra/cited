@@ -127,11 +127,32 @@ function parseSitemap(xml: string): {
   return { type: isIndex ? "index" : "urlset", entries };
 }
 
+// Sub-sitemaps whose URL signals they hold non-article content. These often
+// appear in a publisher's sitemap index but their entries are stale (old
+// newsletters), low-value for L4 comparison (videos / galleries), or
+// non-editorial (press releases). Probing URLs from one of these usually
+// yields baseline-fetch failures or comparison noise that masks the real
+// AI-access verdict.
+const NON_ARTICLE_SUBSITEMAP_RE =
+  /\/(?:eletter|newsletter|podcast|archive|press[-_]?release|video|gallery|tag|category|author)/i;
+
 function pickSubSitemap(subs: SitemapEntry[]): SitemapEntry | null {
   if (subs.length === 0) return null;
-  const newsLike = subs.filter((s) => /news|post|article/i.test(s.loc));
-  const pool = newsLike.length > 0 ? newsLike : subs;
-  const sorted = [...pool].sort((a, b) => {
+  // First, eliminate sub-sitemaps that hold non-article content. Fall back
+  // to the full list only if every candidate is non-article (e.g. a site
+  // whose sitemap index is exclusively newsletter archives).
+  const articleLike = subs.filter(
+    (s) => !NON_ARTICLE_SUBSITEMAP_RE.test(s.loc),
+  );
+  const pool = articleLike.length > 0 ? articleLike : subs;
+  // Within the article-like pool, prefer sub-sitemaps whose URL contains a
+  // positive content keyword. "story" is added alongside the original three
+  // because many publishers use it (cnn.com/sitemap-stories.xml, etc.).
+  const positiveSignal = pool.filter((s) =>
+    /news|post|article|story/i.test(s.loc),
+  );
+  const candidates = positiveSignal.length > 0 ? positiveSignal : pool;
+  const sorted = [...candidates].sort((a, b) => {
     if (a.lastmod && b.lastmod) return b.lastmod.localeCompare(a.lastmod);
     if (a.lastmod) return -1;
     if (b.lastmod) return 1;
