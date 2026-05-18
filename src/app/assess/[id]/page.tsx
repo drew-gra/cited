@@ -9,26 +9,17 @@ import type {
   PlatformAssessment,
 } from "@/lib/api-types";
 import { FINDING_LABEL, type LayerVerdict } from "@/lib/verdicts";
+import { LAYER_PLAIN_DESCRIPTION } from "@/lib/layer-descriptions";
+import { formatLayerMarkdown } from "@/lib/copy-details";
 import {
+  BOTS,
   PLATFORMS,
   PLATFORM_LABELS,
   type AiPlatform,
+  type BotPurpose,
 } from "@/lib/ai-platforms";
 
 const POLL_INTERVAL_MS = 2000;
-
-const POSTURE_LABEL: Record<PlatformAssessment["aggregatePosture"], string> = {
-  open: "Open",
-  mixed: "Mixed",
-  blocked: "Blocked",
-  unknown: "Unknown",
-};
-
-const ACCESS_LABEL: Record<PlatformAssessment["trainingAccess"], string> = {
-  allowed: "Allowed",
-  blocked: "Blocked",
-  unknown: "Unknown",
-};
 
 const LAYER_LABEL: Record<LayerNumber, string> = {
   1: "Layer 1 — robots.txt",
@@ -38,47 +29,46 @@ const LAYER_LABEL: Record<LayerNumber, string> = {
   5: "Layer 5 — Common Crawl presence",
 };
 
-function postureSentence(
-  posture: PlatformAssessment["aggregatePosture"],
+function accessDotColor(
+  access: PlatformAssessment["trainingAccess"] | null,
 ): string {
-  switch (posture) {
-    case "open":
-      return "AI bots for this platform are not blocked across the layers we tested.";
+  switch (access) {
+    case "allowed":
+      return "#4ade80";
     case "blocked":
-      return "AI bots for this platform are blocked or restricted somewhere in the stack.";
-    case "mixed":
-      return "Some bots for this platform are allowed; others are blocked or restricted.";
+      return "#f87171";
     case "unknown":
-      return "Not enough evidence across the layers to determine posture.";
+      return "#fbbf24";
+    default:
+      return "#4b5563";
   }
 }
 
-const CONFIDENCE_LABEL: Record<PlatformAssessment["confidenceBand"], string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-};
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const d = Math.floor(hr / 24);
-  return `${d}d ago`;
+function purposeAccess(
+  a: PlatformAssessment | undefined,
+  purpose: BotPurpose,
+): PlatformAssessment["trainingAccess"] | null {
+  if (!a) return null;
+  if (purpose === "training") return a.trainingAccess;
+  if (purpose === "realtime") return a.realtimeAccess;
+  return a.searchAccess;
 }
 
-function layerStatusLabel(snap: AssessResponse["run"]["layers"][LayerNumber]) {
+function purposeHasBot(
+  platform: AiPlatform,
+  purpose: BotPurpose,
+): boolean {
+  return BOTS.some((b) => b.platform === platform && b.purpose === purpose);
+}
+
+function layerStatusLabel(
+  snap: AssessResponse["run"]["layers"][LayerNumber],
+): string | null {
   if (snap.status === "skipped") return "Coming soon";
-  if (snap.status === "done")
-    return `Last checked ${relativeTime(snap.capturedAt)}${snap.isStale ? " · stale" : ""}`;
   if (snap.status === "running") return "Running…";
   if (snap.status === "error") return "Error";
-  return "Pending";
+  if (snap.status === "pending") return "Pending";
+  return null;
 }
 
 export default function ResultPage({
@@ -90,9 +80,27 @@ export default function ResultPage({
   const [data, setData] = useState<AssessResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [openPlatform, setOpenPlatform] = useState<AiPlatform | null>(null);
-  const [openLayer, setOpenLayer] = useState<LayerNumber | null>(null);
+  const [openHelpLayer, setOpenHelpLayer] = useState<LayerNumber | null>(null);
+  const [copiedLayer, setCopiedLayer] = useState<LayerNumber | null>(null);
+  const [inputUrl, setInputUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    if (openHelpLayer === null) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenHelpLayer(null);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [openHelpLayer]);
+
+  useEffect(() => {
+    setSubmitting(false);
+    setSubmitError(null);
+    setInputUrl("");
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +140,52 @@ export default function ResultPage({
     };
   }, [id]);
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/cited/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: inputUrl }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          body?.error ?? `Assessment request failed (${res.status}).`,
+        );
+      }
+      const { id: newId } = (await res.json()) as { id: string };
+      if (newId === id) {
+        setSubmitting(false);
+        setInputUrl("");
+        return;
+      }
+      router.push(`/assess/${newId}`);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Unknown error.");
+      setSubmitting(false);
+    }
+  }
+
+  async function handleCopyDetails(layer: LayerNumber) {
+    if (!data) return;
+    const md = formatLayerMarkdown(layer, data);
+    if (!md) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopiedLayer(layer);
+      setTimeout(() => {
+        setCopiedLayer((c) => (c === layer ? null : c));
+      }, 1500);
+    } catch {
+      // clipboard unavailable; silent
+    }
+  }
+
   async function handleRefresh() {
     if (!data) return;
     setRefreshing(true);
@@ -142,7 +196,6 @@ export default function ResultPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: data.outlet.primaryUrl,
-          forceRefresh: true,
         }),
       });
       if (!res.ok) {
@@ -152,6 +205,10 @@ export default function ResultPage({
         throw new Error(body?.error ?? "Refresh failed.");
       }
       const { id: newId } = (await res.json()) as { id: string };
+      if (newId === id) {
+        setRefreshing(false);
+        return;
+      }
       router.push(`/assess/${newId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh failed.");
@@ -161,7 +218,7 @@ export default function ResultPage({
 
   if (error && !data) {
     return (
-      <main className="mx-auto flex w-full max-w-[680px] flex-col gap-8 px-6 py-16">
+      <main className="mx-auto flex w-full max-w-[920px] flex-col gap-8 px-6 py-16">
         <p className="text-gray-400">{error}</p>
         <Link
           href="/"
@@ -175,7 +232,7 @@ export default function ResultPage({
 
   if (!data) {
     return (
-      <main className="mx-auto flex w-full max-w-[680px] flex-col gap-8 px-6 py-16">
+      <main className="mx-auto flex w-full max-w-[920px] flex-col gap-8 px-6 py-16">
         <p className="text-gray-400">Loading…</p>
       </main>
     );
@@ -183,81 +240,148 @@ export default function ResultPage({
 
   const isRunning =
     data.run.status === "pending" || data.run.status === "running";
+  const anyLayerStale = Object.values(data.run.layers).some(
+    (snap) => snap.status === "done" && snap.isStale,
+  );
 
   return (
-    <main className="mx-auto flex w-full max-w-[680px] flex-col gap-12 px-6 py-16 sm:py-24">
+    <main className="mx-auto flex w-full max-w-[920px] flex-col gap-12 px-6 py-16 sm:py-24">
       <header className="flex flex-col gap-4">
         <span className="font-medium uppercase tracking-[0.3em] text-gray-600">
-          Bread &amp; Law / Tools / Cited
+          <a
+            href="https://www.breadandlaw.com"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="hover:text-gray-100 hover:underline hover:underline-offset-4"
+          >
+            Bread &amp; Law
+          </a>
+          {" / "}
+          <Link
+            href="/"
+            className="hover:text-gray-100 hover:underline hover:underline-offset-4"
+          >
+            Cited
+          </Link>
         </span>
-        <h1 className="text-gray-100">{data.outlet.rootDomain}</h1>
+      </header>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <label
+          htmlFor="url"
+          className="font-medium uppercase tracking-[0.2em] text-gray-600"
+        >
+          Article URL
+        </label>
+        <input
+          id="url"
+          name="url"
+          type="url"
+          required
+          inputMode="url"
+          autoComplete="url"
+          placeholder="https://www.nytimes.com/section/business"
+          value={inputUrl}
+          onChange={(e) => setInputUrl(e.target.value)}
+          disabled={submitting}
+          className="w-full border border-gray-700 bg-black px-4 py-3 text-gray-100 placeholder:text-gray-600 focus:border-gray-100 focus:outline-none disabled:text-gray-600"
+        />
+        <button
+          type="submit"
+          disabled={submitting || !inputUrl}
+          className="self-start font-medium uppercase tracking-[0.2em] text-gray-100 hover:underline hover:underline-offset-4 disabled:cursor-default disabled:text-gray-600 disabled:no-underline"
+        >
+          {submitting ? "Assessing…" : "Run assessment"}
+        </button>
+        {submitError ? (
+          <p className="text-gray-400">{submitError}</p>
+        ) : null}
+      </form>
+
+      <p className="text-gray-400">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Current Assessment:
+        </span>{" "}
         <a
           href={data.outlet.primaryUrl}
-          className="text-gray-400 underline underline-offset-4 hover:text-gray-100"
           target="_blank"
           rel="noreferrer noopener"
+          className="underline underline-offset-4 hover:text-gray-100"
         >
-          {data.outlet.primaryUrl}
+          {data.outlet.rootDomain}
         </a>
-      </header>
+      </p>
 
       {error ? (
         <p className="border border-gray-700 p-4 text-gray-400">{error}</p>
       ) : null}
 
-      <section className="flex flex-col gap-4">
-        <h2 className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Top-line
-        </h2>
-        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
+      <section className="flex flex-col gap-8">
+        <ul className="grid grid-cols-5 gap-2">
           {PLATFORMS.map((platform) => {
             const a = data.assessments.find((x) => x.platform === platform);
-            const isOpen = openPlatform === platform;
+            const purposes = (
+              ["training", "realtime", "search"] as const
+            ).filter((p) => purposeHasBot(platform, p));
             return (
-              <li key={platform} className="flex flex-col">
-                <button
-                  type="button"
-                  onClick={() => setOpenPlatform(isOpen ? null : platform)}
-                  className="flex flex-col gap-2 py-4 text-left sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
-                >
-                  <span className="text-gray-100">
+              <li key={platform} className="flex">
+                <div className="flex w-full flex-col items-center gap-6 py-4 text-center">
+                  <span className="flex gap-1.5">
+                    {purposes.map((purpose) => {
+                      const access = purposeAccess(a, purpose);
+                      return (
+                        <span
+                          key={purpose}
+                          aria-label={`${purpose}: ${access ?? "pending"}`}
+                          style={{ backgroundColor: accessDotColor(access) }}
+                          className="block h-3 w-3 rounded-full"
+                        />
+                      );
+                    })}
+                  </span>
+                  <span className="text-sm uppercase tracking-[0.15em] text-gray-400">
                     {PLATFORM_LABELS[platform]}
                   </span>
-                  {a ? (
-                    <span className="flex flex-col gap-1 text-gray-400 sm:items-end">
-                      <span className="font-medium uppercase tracking-[0.2em] text-gray-100">
-                        {POSTURE_LABEL[a.aggregatePosture]}
-                      </span>
-                      <span>{postureSentence(a.aggregatePosture)}</span>
-                      <span className="text-gray-600">
-                        Confidence: {CONFIDENCE_LABEL[a.confidenceBand]}
-                      </span>
-                    </span>
-                  ) : (
-                    <span className="text-gray-600">Pending</span>
-                  )}
-                </button>
-                {isOpen && a ? (
-                  <PlatformDrilldown
-                    platform={platform}
-                    assessment={a}
-                    signal={data.layer1Signal}
-                  />
-                ) : null}
+                  <span className="text-sm text-gray-600">
+                    {purposes.join(" · ")}
+                  </span>
+                </div>
               </li>
             );
           })}
         </ul>
       </section>
 
+      <p className="text-gray-400">
+        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
+          Data State:
+        </span>{" "}
+        {isRunning || refreshing
+          ? "Cited is working. It can take several minutes to crawl with politeness…"
+          : anyLayerStale
+            ? "This outlet's data may not be up to date."
+            : "This outlet's data is up to date."}
+        {!isRunning && !refreshing ? (
+          <>
+            {" "}
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="underline underline-offset-4 hover:text-gray-100"
+            >
+              Refresh
+            </button>
+          </>
+        ) : null}
+      </p>
+
       <section className="flex flex-col gap-4">
         <h2 className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Layers
+          Technical Analysis
         </h2>
         <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
           {([1, 2, 3, 4, 5] as const).map((layer) => {
             const snap = data.run.layers[layer];
-            const isOpen = openLayer === layer;
             const verdict: LayerVerdict | undefined = data.verdicts.find(
               (v) => v.layer === layer,
             );
@@ -267,66 +391,80 @@ export default function ResultPage({
               (layer === 3 && data.layer3Signal !== null) ||
               (layer === 4 && data.layer4Signal !== null) ||
               (layer === 5 && data.layer5Signal !== null);
+            const statusLabel = layerStatusLabel(snap);
+            const wasCopied = copiedLayer === layer;
             return (
-              <li key={layer} className="flex flex-col">
-                <button
-                  type="button"
-                  onClick={() => setOpenLayer(isOpen ? null : layer)}
-                  disabled={!hasEvidence}
-                  className="flex flex-col gap-2 py-4 text-left disabled:cursor-default"
-                >
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8">
+              <li key={layer} className="flex flex-col gap-2 py-4">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8">
+                  <span className="inline-flex items-baseline gap-2">
                     <span className="text-gray-100">
                       {LAYER_LABEL[layer]}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setOpenHelpLayer(layer)}
+                      aria-label={`What does ${LAYER_LABEL[layer]} look at?`}
+                      className="inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-gray-600 text-xs leading-none text-gray-600 hover:border-gray-100 hover:text-gray-100"
+                    >
+                      ?
+                    </button>
+                  </span>
+                  {hasEvidence ? (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyDetails(layer)}
+                      className="self-start text-sm font-medium uppercase tracking-[0.2em] text-gray-100 hover:underline hover:underline-offset-4 sm:self-auto"
+                    >
+                      {wasCopied ? "Copied" : "Copy details"}
+                    </button>
+                  ) : statusLabel ? (
                     <span className="text-gray-600 sm:text-right">
-                      {layerStatusLabel(snap)}
+                      {statusLabel}
                     </span>
-                  </div>
-                  {verdict ? (
-                    <p className="max-w-prose text-gray-400">
-                      <span className="font-medium uppercase tracking-[0.2em] text-gray-100">
-                        {FINDING_LABEL[verdict.finding]}
-                      </span>
-                      {" — "}
-                      {verdict.headline}
-                    </p>
                   ) : null}
-                </button>
-                {isOpen && layer === 1 && data.layer1Signal ? (
-                  <Layer1Evidence signal={data.layer1Signal} />
-                ) : null}
-                {isOpen && layer === 2 && data.layer2Signal ? (
-                  <Layer2Evidence signal={data.layer2Signal} />
-                ) : null}
-                {isOpen && layer === 3 && data.layer3Signal ? (
-                  <Layer3Evidence signal={data.layer3Signal} />
-                ) : null}
-                {isOpen && layer === 4 && data.layer4Signal ? (
-                  <Layer4Evidence signal={data.layer4Signal} />
-                ) : null}
-                {isOpen && layer === 5 && data.layer5Signal ? (
-                  <Layer5Evidence signal={data.layer5Signal} />
+                </div>
+                {verdict ? (
+                  <p className="max-w-prose text-gray-400">
+                    <span className="font-medium uppercase tracking-[0.2em] text-gray-100">
+                      {FINDING_LABEL[verdict.finding]}
+                    </span>
+                    {" — "}
+                    {verdict.headline}
+                  </p>
                 ) : null}
               </li>
             );
           })}
         </ul>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-gray-600">
-            Run {data.id.slice(0, 8)} · {isRunning ? "in progress" : "done"} ·
-            updated {relativeTime(data.run.updatedAt)}
-          </span>
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={refreshing || isRunning}
-            className="self-start border border-gray-700 px-4 py-2 font-medium uppercase tracking-[0.2em] text-gray-100 hover:border-gray-100 disabled:text-gray-600 disabled:hover:border-gray-700"
-          >
-            {refreshing ? "Refreshing…" : "Refresh assessment"}
-          </button>
-        </div>
       </section>
+
+      {openHelpLayer !== null ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setOpenHelpLayer(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-w-md flex-col gap-4 border border-gray-700 bg-black p-8"
+          >
+            <h3 className="font-medium uppercase tracking-[0.2em] text-gray-600">
+              {LAYER_LABEL[openHelpLayer]}
+            </h3>
+            <p className="text-gray-100">
+              {LAYER_PLAIN_DESCRIPTION[openHelpLayer]}
+            </p>
+            <button
+              type="button"
+              onClick={() => setOpenHelpLayer(null)}
+              className="self-start text-sm uppercase tracking-[0.2em] text-gray-600 hover:text-gray-100"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <footer className="flex flex-col gap-2 text-gray-600">
         <Link
@@ -335,485 +473,12 @@ export default function ResultPage({
         >
           How Cited works
         </Link>
-        <Link href="/" className="underline underline-offset-4 hover:text-gray-400">
-          Assess another outlet
-        </Link>
+        <p className="mt-4">
+          Cited is available to clients as a managed service. Email enquiries
+          to newbiz at breadandlaw dot com.
+        </p>
+        <p className="mt-8 self-center">© 2026 Bread &amp; Law LLC</p>
       </footer>
     </main>
-  );
-}
-
-function Layer1Evidence({
-  signal,
-}: {
-  signal: NonNullable<AssessResponse["layer1Signal"]>;
-}) {
-  return (
-    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-      {signal.platform.platform !== "unknown" ? (
-        <div className="flex flex-col gap-2">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            Hosting platform detected
-          </span>
-          <span className="text-gray-100">
-            {signal.platform.platform}
-            {signal.platform.isDefault ? " (platform default)" : ""}
-          </span>
-          <p className="text-gray-400">{signal.platform.note}</p>
-        </div>
-      ) : null}
-      {signal.sitemaps.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            Sitemaps declared
-          </span>
-          <span className="text-gray-400">
-            {signal.sitemaps.length} sitemap
-            {signal.sitemaps.length === 1 ? "" : "s"}
-          </span>
-        </div>
-      ) : null}
-      {signal.status === "ok" && signal.rawText ? (
-        <div className="flex flex-col gap-2">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            robots.txt source
-          </span>
-          <pre className="overflow-x-auto whitespace-pre-wrap border border-gray-700 p-4 text-gray-400">
-            {signal.rawText}
-          </pre>
-        </div>
-      ) : signal.status === "not_found" ? (
-        <p className="text-gray-400">
-          No /robots.txt at this domain (404). Bots are allowed by convention.
-        </p>
-      ) : signal.status === "error" ? (
-        <p className="text-gray-400">
-          Could not fetch /robots.txt: {signal.errorMessage ?? "unknown error"}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function Layer2Evidence({
-  signal,
-}: {
-  signal: NonNullable<AssessResponse["layer2Signal"]>;
-}) {
-  const aiMetaEntries = Object.entries(signal.homepage.aiMetaTags);
-  return (
-    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-      {signal.homepage.status === "error" ? (
-        <p className="text-gray-400">
-          Could not fetch homepage:{" "}
-          {signal.homepage.errorMessage ?? "unknown error"}.
-          {signal.homepage.httpStatus
-            ? ` HTTP ${signal.homepage.httpStatus}.`
-            : ""}{" "}
-          The site may be blocking generic crawlers at the CDN; Layer 4 will
-          probe further when it ships.
-        </p>
-      ) : (
-        <>
-          <Row
-            label="X-Robots-Tag header"
-            value={signal.homepage.xRobotsTag ?? "—"}
-          />
-          <Row
-            label="meta robots"
-            value={signal.homepage.metaRobots ?? "—"}
-          />
-          {aiMetaEntries.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-                AI bot meta tags
-              </span>
-              <ul className="flex flex-col gap-1 text-gray-100">
-                {aiMetaEntries.map(([name, value]) => (
-                  <li key={name}>
-                    <span className="text-gray-400">{name}: </span>
-                    {value}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <Row label="AI bot meta tags" value="—" />
-          )}
-          {signal.homepage.aiContentDeclaration ? (
-            <Row
-              label="ai-content-declaration"
-              value={signal.homepage.aiContentDeclaration}
-            />
-          ) : null}
-        </>
-      )}
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          /llms.txt
-        </span>
-        <span className="text-gray-400">
-          {signal.llmsTxt.state === "present"
-            ? `present (${signal.llmsTxt.sizeBytes} bytes) — the publisher exposes a Markdown-formatted summary file intended for LLMs.`
-            : signal.llmsTxt.state === "error"
-              ? `error fetching: ${signal.llmsTxt.errorMessage ?? "unknown"}`
-              : `absent (HTTP ${signal.llmsTxt.httpStatus ?? "?"})`}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function Layer3Evidence({
-  signal,
-}: {
-  signal: NonNullable<AssessResponse["layer3Signal"]>;
-}) {
-  return (
-    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          CDN / hosting detected
-        </span>
-        <span className="text-gray-100">
-          {signal.detected.length > 0 ? signal.detected.join(", ") : "—"}
-        </span>
-        {signal.detected.length === 0 ? (
-          <p className="text-gray-400">
-            No known CDN signatures matched. The site may be origin-served, or
-            using a CDN we don&apos;t yet fingerprint.
-          </p>
-        ) : null}
-      </div>
-      {signal.evidence.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            Evidence
-          </span>
-          <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
-            {signal.evidence.map((e, i) => (
-              <li
-                key={i}
-                className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
-              >
-                <span className="text-gray-100">{e.reason}</span>
-                <span className="text-gray-400 sm:text-right">
-                  {e.header}: {e.value}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Layer4Evidence({
-  signal,
-}: {
-  signal: NonNullable<AssessResponse["layer4Signal"]>;
-}) {
-  const sourceLabel: Record<typeof signal.sampleSource, string> = {
-    sitemap: "Sitemap",
-    rss: "RSS / Atom feed",
-    homepage: "Homepage scrape",
-    none: "—",
-  };
-  const aggregateLabel: Record<
-    (typeof signal.perBot)[number]["aggregate"],
-    string
-  > = {
-    allowed: "Allowed",
-    blocked: "Blocked",
-    mixed: "Mixed",
-    unknown: "Unknown",
-  };
-
-  if (signal.status === "no_urls") {
-    return (
-      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-        <p className="text-gray-400">
-          Could not discover any article URLs to probe. We tried /sitemap.xml,
-          common alternates, RSS, and homepage scraping.
-        </p>
-      </div>
-    );
-  }
-
-  if (signal.status === "baseline_failed") {
-    return (
-      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-        <p className="text-gray-400">
-          The baseline browser user agent was also blocked or unreachable on
-          every sampled URL, so we can&apos;t tell whether AI bots are being
-          treated differently. The Layer 3 (CDN / WAF) evidence is what
-          applies here.
-        </p>
-        {signal.sampleUrls.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-              URLs attempted
-            </span>
-            <ul className="flex flex-col gap-1 text-gray-400">
-              {signal.sampleUrls.map((u) => (
-                <li key={u} className="break-all">
-                  {u}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-6 border-t border-gray-700 py-6">
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Sample source
-        </span>
-        <span className="text-gray-100">
-          {sourceLabel[signal.sampleSource]}
-          {signal.sampleSourceUrl ? ` — ${signal.sampleSourceUrl}` : ""}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Per-bot verdict
-        </span>
-        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
-          {signal.perBot.map((bot) => (
-            <li
-              key={bot.ua}
-              className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
-            >
-              <span className="text-gray-100">{bot.ua}</span>
-              <span className="text-gray-400 sm:text-right">
-                {aggregateLabel[bot.aggregate]}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          URLs probed
-        </span>
-        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
-          {signal.sampleUrls.map((url) => {
-            const baseline = signal.probes.find(
-              (p) => p.isBaseline && p.url === url,
-            );
-            const bots = signal.probes.filter(
-              (p) => !p.isBaseline && p.url === url,
-            );
-            return (
-              <li key={url} className="flex flex-col gap-2 py-3">
-                <span className="break-all text-gray-100">{url}</span>
-                <div className="flex flex-col gap-1 text-gray-400">
-                  <span>
-                    <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-                      baseline
-                    </span>{" "}
-                    {baseline?.statusCode ?? "error"}
-                    {baseline?.responseSizeBytes !== undefined &&
-                    baseline?.responseSizeBytes !== null
-                      ? ` · ${baseline.responseSizeBytes}B`
-                      : ""}
-                  </span>
-                  {bots.map((b) => (
-                    <span key={b.userAgent}>
-                      <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-                        {b.userAgent}
-                      </span>{" "}
-                      {b.statusCode ?? "error"}
-                      {b.responseSizeBytes !== undefined &&
-                      b.responseSizeBytes !== null
-                        ? ` · ${b.responseSizeBytes}B`
-                        : ""}
-                    </span>
-                  ))}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function Layer5Evidence({
-  signal,
-}: {
-  signal: NonNullable<AssessResponse["layer5Signal"]>;
-}) {
-  if (signal.indexesQueried === 0) {
-    return (
-      <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-        <p className="text-gray-400">
-          Could not fetch Common Crawl index metadata. The CDX API may be
-          down or rate-limiting; try refreshing.
-        </p>
-      </div>
-    );
-  }
-
-  const coverageLabel: Record<typeof signal.coverageBucket, string> = {
-    absent: "Absent",
-    low: "Low",
-    moderate: "Moderate",
-    high: "High",
-  };
-  const trendLabel: Record<typeof signal.trend, string> = {
-    absent: "Not present in any queried index",
-    decreasing: "Decreasing — appears less in recent indexes",
-    steady: "Steady across the sampled window",
-    increasing: "Increasing — appears more in recent indexes",
-    insufficient_data: "Insufficient data to determine trend",
-  };
-  const anyCapped = signal.indexes.some((i) => i.capped);
-
-  return (
-    <div className="flex flex-col gap-4 border-t border-gray-700 py-6">
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Coverage
-        </span>
-        <span className="text-gray-100">
-          {coverageLabel[signal.coverageBucket]} —{" "}
-          {signal.indexesPresent}/{signal.indexesQueried} indexes contain
-          records · {signal.totalRecords}
-          {anyCapped ? "+" : ""} records total
-        </span>
-      </div>
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Trend
-        </span>
-        <span className="text-gray-400">{trendLabel[signal.trend]}</span>
-      </div>
-      <div className="flex flex-col gap-2">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Per-index breakdown
-        </span>
-        <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
-          {signal.indexes.map((idx) => (
-            <li
-              key={idx.indexName}
-              className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
-            >
-              <span className="text-gray-100">{idx.indexName}</span>
-              <span className="text-gray-400 sm:text-right">
-                {idx.error
-                  ? `error: ${idx.error}`
-                  : `${idx.records}${idx.capped ? "+" : ""} record${
-                      idx.records === 1 ? "" : "s"
-                    }`}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8">
-      <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-        {label}
-      </span>
-      <span className="text-gray-400 sm:text-right">{value}</span>
-    </div>
-  );
-}
-
-function PlatformDrilldown({
-  platform,
-  assessment,
-  signal,
-}: {
-  platform: AiPlatform;
-  assessment: PlatformAssessment;
-  signal: AssessResponse["layer1Signal"];
-}) {
-  const platformBots =
-    signal?.perBot.filter((b) => b.platform === platform) ?? [];
-
-  return (
-    <div className="flex flex-col gap-6 border-t border-gray-700 py-6">
-      <div className="flex flex-col gap-3">
-        <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          Per-purpose access
-        </span>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {(["training", "realtime", "search"] as const).map((purpose) => {
-            const value =
-              purpose === "training"
-                ? assessment.trainingAccess
-                : purpose === "realtime"
-                  ? assessment.realtimeAccess
-                  : assessment.searchAccess;
-            return (
-              <div key={purpose} className="flex flex-col gap-1">
-                <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-                  {purpose}
-                </span>
-                <span className="text-gray-100">{ACCESS_LABEL[value]}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {platformBots.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            Bot-by-bot (Layer 1)
-          </span>
-          <ul className="flex flex-col divide-y divide-gray-700 border-y border-gray-700">
-            {platformBots.map((bot) => (
-              <li
-                key={bot.ua}
-                className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8"
-              >
-                <span className="text-gray-100">{bot.ua}</span>
-                <span className="text-gray-400 sm:text-right">
-                  {ACCESS_LABEL[bot.rootAccess]}
-                  {bot.matchedRule
-                    ? ` · line ${bot.matchedLineNumber}: ${bot.matchedRule}`
-                    : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {signal?.status === "ok" && signal.rawText ? (
-        <div className="flex flex-col gap-3">
-          <span className="font-medium uppercase tracking-[0.2em] text-gray-600">
-            robots.txt source
-          </span>
-          <pre className="overflow-x-auto whitespace-pre-wrap border border-gray-700 p-4 text-gray-400">
-            {signal.rawText}
-          </pre>
-        </div>
-      ) : signal?.status === "not_found" ? (
-        <p className="text-gray-400">
-          No /robots.txt at this domain (404). Bots are allowed by convention.
-        </p>
-      ) : signal?.status === "error" ? (
-        <p className="text-gray-400">
-          Could not fetch /robots.txt: {signal.errorMessage}
-        </p>
-      ) : null}
-    </div>
   );
 }

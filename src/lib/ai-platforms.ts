@@ -1,8 +1,8 @@
 export const PLATFORMS = [
-  "openai",
   "anthropic",
-  "google",
+  "openai",
   "perplexity",
+  "google",
   "common_crawl",
 ] as const;
 export type AiPlatform = (typeof PLATFORMS)[number];

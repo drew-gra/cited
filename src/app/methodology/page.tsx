@@ -11,7 +11,21 @@ export default function MethodologyPage() {
     <main className="mx-auto flex w-full max-w-[680px] flex-col gap-12 px-6 py-16 sm:py-24">
       <header className="flex flex-col gap-4">
         <span className="font-medium uppercase tracking-[0.3em] text-gray-600">
-          Bread &amp; Law / Tools / Cited
+          <a
+            href="https://www.breadandlaw.com"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="hover:text-gray-100 hover:underline hover:underline-offset-4"
+          >
+            Bread &amp; Law
+          </a>
+          {" / "}
+          <Link
+            href="/"
+            className="hover:text-gray-100 hover:underline hover:underline-offset-4"
+          >
+            Cited
+          </Link>
         </span>
         <h1 className="text-gray-100">Methodology</h1>
         <p className="max-w-prose text-gray-400">
@@ -90,6 +104,11 @@ export default function MethodologyPage() {
         <Link href="/" className="underline underline-offset-4 hover:text-gray-400">
           Back to Cited
         </Link>
+        <p className="mt-4">
+          Cited is available to clients as a managed service. Email enquiries
+          to newbiz at breadandlaw dot com.
+        </p>
+        <p className="mt-8 self-center">© 2026 Bread &amp; Law LLC</p>
       </footer>
     </main>
   );
