@@ -4,10 +4,7 @@ import { db } from "@/lib/db";
 import {
   outlets,
   assessmentRuns,
-  assessments,
   signals,
-  type AccessState,
-  type AggregatePosture,
   type LayerStatus,
   type RunStatus,
 } from "@/lib/db/schema";
@@ -16,14 +13,13 @@ import type {
   LayerNumber,
   LayerSnapshot,
 } from "@/lib/api-types";
-import type { AiPlatform } from "@/lib/ai-platforms";
 import type { RobotsLayer1Result } from "@/lib/layers/robots";
 import type { L2Result } from "@/lib/layers/declarations";
-import type { L3Result } from "@/lib/layers/cdn";
 import type { L4Result } from "@/lib/layers/ua-probing";
 import type { L5Result } from "@/lib/layers/common-crawl";
+import { detectCdn, type L3Result } from "@/lib/layers/cdn";
 import { buildLayerVerdicts } from "@/lib/verdicts";
-import { confidenceBand } from "@/lib/posture";
+import { derivePostures } from "@/lib/posture";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -79,22 +75,52 @@ export async function GET(_: Request, { params }: RouteContext) {
     };
   };
 
-  const runAssessments = await db
-    .select()
-    .from(assessments)
-    .where(eq(assessments.assessmentRunId, run.id));
-
   const layer1Signal =
     (latestPerLayer.get(1)?.signalValue as RobotsLayer1Result | undefined) ??
     null;
   const layer2Signal =
     (latestPerLayer.get(2)?.signalValue as L2Result | undefined) ?? null;
-  const layer3Signal =
+  const layer3SignalPersisted =
     (latestPerLayer.get(3)?.signalValue as L3Result | undefined) ?? null;
   const layer4Signal =
     (latestPerLayer.get(4)?.signalValue as L4Result | undefined) ?? null;
   const layer5Signal =
     (latestPerLayer.get(5)?.signalValue as L5Result | undefined) ?? null;
+
+  // Recompute L3 from L2's captured headers on every read so cdn.ts
+  // fingerprint additions propagate to historical assessments without
+  // requiring a force-refresh. The persisted L3 signal stays in the DB
+  // as audit trail; we just don't display it directly. Falls back to
+  // the persisted signal if L2 has no usable headers (e.g. L2 fetch
+  // failed and captured no response).
+  const layer3Signal: L3Result | null = (() => {
+    if (!layer2Signal) return layer3SignalPersisted;
+    const headers = layer2Signal.homepage.responseHeaders;
+    if (!headers || Object.keys(headers).length === 0) {
+      return layer3SignalPersisted;
+    }
+    const recomputed = detectCdn(outlet.rootDomain, headers);
+    // Preserve the original capture time so the timestamp keeps its
+    // existing meaning ("when L2 was last fetched") rather than
+    // misleadingly tracking "when this read happened".
+    return {
+      ...recomputed,
+      fetchedAt: layer3SignalPersisted?.fetchedAt ?? recomputed.fetchedAt,
+    };
+  })();
+
+  // Derive per-platform postures live from the current layer signals on
+  // every read. Lets posture-rule changes (e.g. confidence calibration,
+  // edge-block heuristics) take effect against historical assessments
+  // without re-running the underlying probes. The persisted assessments
+  // table rows remain as the run-time audit record.
+  const postures = derivePostures({
+    layer1Signal,
+    layer2Signal,
+    layer3Signal,
+    layer4Signal,
+    layer5Signal,
+  });
 
   const response: AssessResponse = {
     id: run.id,
@@ -115,15 +141,7 @@ export async function GET(_: Request, { params }: RouteContext) {
       createdAt: run.createdAt.toISOString(),
       updatedAt: run.updatedAt.toISOString(),
     },
-    assessments: runAssessments.map((a) => ({
-      platform: a.aiPlatform as AiPlatform,
-      trainingAccess: a.trainingAccess as AccessState,
-      realtimeAccess: a.realtimeAccess as AccessState,
-      searchAccess: a.searchAccess as AccessState,
-      aggregatePosture: a.aggregatePosture as AggregatePosture,
-      confidence: a.confidence,
-      confidenceBand: confidenceBand(a.confidence),
-    })),
+    assessments: postures,
     layer1Signal,
     layer2Signal,
     layer3Signal,
