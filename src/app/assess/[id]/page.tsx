@@ -277,7 +277,7 @@ export default function ResultPage({
           htmlFor="url"
           className="font-medium uppercase tracking-[0.2em] text-gray-600"
         >
-          Article URL
+          Coverage to analyze
         </label>
         <input
           id="url"
@@ -286,7 +286,6 @@ export default function ResultPage({
           required
           inputMode="url"
           autoComplete="url"
-          placeholder="https://www.nytimes.com/section/business"
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
           disabled={submitting}
@@ -476,15 +475,15 @@ export default function ResultPage({
       ) : null}
 
       <footer className="flex flex-col gap-2 text-gray-600">
-        <Link
-          href="/methodology"
-          className="underline underline-offset-4 hover:text-gray-400"
-        >
-          How Cited works
-        </Link>
-        <p className="mt-4">
-          Cited is available to clients as a managed service. Email enquiries
-          to newbiz at breadandlaw dot com.
+        <p className="text-gray-400">
+          <Link
+            href="/methodology"
+            className="underline underline-offset-4 hover:text-gray-100"
+          >
+            Technical Details
+          </Link>
+          {" | "}
+          <span className="text-gray-600">Licensing</span>
         </p>
         <p className="mt-8 self-center">© 2026 Bread &amp; Law LLC</p>
       </footer>

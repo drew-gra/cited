@@ -79,7 +79,7 @@ export default function CitedPage() {
           htmlFor="url"
           className="font-medium uppercase tracking-[0.2em] text-gray-600"
         >
-          Article URL
+          Coverage to analyze
         </label>
         <input
           id="url"
@@ -88,7 +88,6 @@ export default function CitedPage() {
           required
           inputMode="url"
           autoComplete="url"
-          placeholder="https://www.nytimes.com/section/business"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           disabled={submitting}
@@ -104,14 +103,12 @@ export default function CitedPage() {
         {error ? <p className="text-gray-400">{error}</p> : null}
       </form>
 
-      <section className="flex flex-col gap-6">
-        <h2 className="font-medium uppercase tracking-[0.2em] text-gray-600">
-          What gets checked
-        </h2>
-        <p className="text-gray-100">
-          Anthropic | OpenAI | Perplexity | Google | Common Crawl
-        </p>
-      </section>
+      <p className="text-gray-600">
+        <span className="font-medium uppercase tracking-[0.2em]">
+          What's checked:
+        </span>{" "}
+        Anthropic | OpenAI | Perplexity | Google | Common Crawl
+      </p>
 
       <footer className="flex flex-col gap-2 text-gray-600">
         <p className="self-center">© 2026 Bread &amp; Law LLC</p>
