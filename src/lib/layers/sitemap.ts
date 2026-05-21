@@ -28,7 +28,7 @@
  */
 
 import { gunzipSync } from "node:zlib";
-import { BASELINE_USER_AGENT, POLITENESS } from "../policy";
+import { BASELINE_USER_AGENT } from "../policy";
 
 export type SitemapSource = "sitemap" | "rss" | "homepage" | "none";
 
@@ -42,7 +42,23 @@ export type SitemapDiscoveryResult = {
 const SAMPLE_URLS_TARGET = 5;
 const RECENT_COUNT = 2;
 const MAX_INDEX_DEPTH = 2;
-const SITEMAP_FETCH_TIMEOUT_MS = POLITENESS.fetchTimeoutMs;
+
+// Discovery uses a tighter timeout than the L4 probe phase. Discovery is
+// bootstrap work — we just need to find article URLs to probe — and
+// publishers with aggressive edge protection (NPR, etc.) often tarpit
+// sitemap fetches the same way they tarpit article fetches. Waiting the
+// full L4 timeout per sitemap URL multiplies discovery wall-clock without
+// improving outcomes; 3s is enough to give a fast server a chance and
+// bail quickly on tarpits.
+const SITEMAP_FETCH_TIMEOUT_MS = 3_000;
+
+// Publishers like NPR declare ten or more Sitemap: directives in their
+// robots.txt. When their edge tarpits sitemap URLs, trying all of them
+// just burns wall-clock — the pattern is clear after a few failures.
+// After this many attempts, fall through to standard paths / RSS /
+// homepage scrape. Most well-behaved publishers declare 1-3 sitemaps,
+// so this cap doesn't penalize them.
+const MAX_ROBOTS_SITEMAPS_TO_TRY = 3;
 
 const SITEMAP_PATHS = [
   "/sitemap.xml",
@@ -305,7 +321,11 @@ export async function findSampleArticleUrls(
   options?: FindSampleOptions,
 ): Promise<SitemapDiscoveryResult> {
   if (options?.robotsSitemaps) {
-    for (const url of options.robotsSitemaps) {
+    const sitemapsToTry = options.robotsSitemaps.slice(
+      0,
+      MAX_ROBOTS_SITEMAPS_TO_TRY,
+    );
+    for (const url of sitemapsToTry) {
       if (!isValidSitemapUrl(url)) continue;
       const { text } = await fetchTextWithGzip(url);
       if (!text) continue;
