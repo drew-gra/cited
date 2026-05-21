@@ -90,6 +90,11 @@ const INTERESTING_HEADERS = [
   "x-served-by",
   "x-fastly-request-id",
   "x-cache",
+  // Fastly's x-timer debug header. Critical to capture: when a publisher
+  // redirects to a canonical URL (e.g. theguardian.com → /us), the final
+  // response often drops server/via/x-served-by but retains x-timer.
+  // Without it we'd miss Fastly on many redirecting publishers.
+  "x-timer",
   // Akamai
   "x-akamai-request-id",
   "x-akamai-transformed",

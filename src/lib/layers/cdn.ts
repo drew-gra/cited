@@ -84,6 +84,17 @@ const FINGERPRINTS: Fingerprint[] = [
     header: "x-fastly-request-id",
     reason: "x-fastly-request-id header present",
   },
+  // x-timer is Fastly's debug timing header in the canonical
+  // S<float>,VS<int>,VE<int> format. It survives on the final response
+  // even when redirects drop the other Fastly indicators — required to
+  // detect publishers like theguardian.com that redirect to a canonical
+  // URL (e.g. /us, /uk) and whose final response carries only x-timer.
+  {
+    cdn: "fastly",
+    header: "x-timer",
+    pattern: /^S\d/,
+    reason: "x-timer header in Fastly debug-timer format",
+  },
   // Akamai
   {
     cdn: "akamai",
