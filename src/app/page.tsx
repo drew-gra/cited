@@ -57,15 +57,20 @@ export default function CitedPage() {
           </Link>
         </span>
         <p className="max-w-prose text-gray-400">
-          Cited is a free tool that shows whether or not a given news article
-          can influence AI results, right now.{" "}
+          Cited analyzes news for discoverability across different AI
+          platforms by observing in real time how AI models interact with
+          the content of news publishers. It is one of Bread &amp; Law&apos;s
+          proprietary tools.
+        </p>
+        <p className="text-gray-400">
           <Link
             href="/methodology"
             className="underline underline-offset-4 hover:text-gray-100"
           >
-            Technical details
+            Technical Details
           </Link>
-          .
+          {" | "}
+          <span className="text-gray-600">Licensing</span>
         </p>
       </header>
 
