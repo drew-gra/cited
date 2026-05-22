@@ -147,6 +147,18 @@ translators for every layer, per-layer expandable evidence panels
 IP rate limit, basePath rewrite-friendly URL handling.
 
 **Preflight (L0) hardening — follow-ups:**
+- Solo-creator sites that look like publications. A one-person operation
+  with WordPress + NewsArticle markup + recent posts + section nav
+  scores like a real outlet, because structurally it is one — the only
+  difference is editorial scale. The existing `single_byline_only`
+  counter (−2) is the only thing pushing back, and it's blunt
+  (Sports Mockery, a real multi-author outlet, sometimes triggers it
+  by sampling luck). Not solvable with a denylist (unique domains).
+  Would need either: a stronger single-byline penalty, an editorial-
+  scale signal (multiple distinct authors over a larger sample),
+  network-reputation data (does this domain get cited by other
+  outlets?), or a manual review queue. Defer until a real failure
+  case shows up.
 - Newsroom-pages detector matches exact paths (`/about`, `/staff`, etc.).
   Misses common variants like `/about-us`, `/our-team`, `/who-we-are`.
   Expand or switch to substring matching with a short denylist.

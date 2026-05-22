@@ -389,6 +389,11 @@ export default function ResultPage({
             {submitting ? "Assessing…" : "Run assessment"}
           </button>
           <PreflightDot finding={displayedFinding} />
+          {displayedFinding === "not_news" ? (
+            <span className="uppercase tracking-[0.2em] text-gray-400">
+              Enter a news URL
+            </span>
+          ) : null}
         </div>
         {submitError ? (
           <p className="text-gray-400">{submitError}</p>

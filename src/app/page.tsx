@@ -172,6 +172,11 @@ export default function CitedPage() {
             {submitting ? "Assessing…" : "Run assessment"}
           </button>
           <PreflightDot finding={lastFinding} />
+          {lastFinding === "not_news" ? (
+            <span className="uppercase tracking-[0.2em] text-gray-400">
+              Enter a news URL
+            </span>
+          ) : null}
         </div>
         {error ? <p className="text-gray-400">{error}</p> : null}
       </form>

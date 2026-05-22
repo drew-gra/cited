@@ -56,6 +56,21 @@ export function verdictForPreflight(
     };
   }
 
+  // Social-platform denylist is checked first — it overrides every
+  // other rule (newsletter override, error path, score thresholds).
+  // These domains aren't editorial publications regardless of what
+  // their HTML happens to look like, and the v1 product line is
+  // explicit about only assessing news outlets.
+  if (signal.socialPlatformDenied) {
+    return {
+      finding: "not_news",
+      headline: `${signal.rootDomain} is a social-media platform — Cited only assesses editorial publications.`,
+      confidence: "high",
+      score: signal.score,
+      reasons: signal.reasons,
+    };
+  }
+
   if (signal.status === "error") {
     // Homepage was unreachable, but we still collect Wikipedia and
     // article-sample signals in the error path. If those independently

@@ -64,6 +64,7 @@ export type PreflightSignal = {
   wikipedia: WikipediaLookupResult | null;
   platform: PlatformHint | null;
   newsletterPlatformOverride: boolean;
+  socialPlatformDenied: boolean;
   score: number;
   reasons: PreflightReason[];
 };
@@ -106,6 +107,49 @@ const NEWSLETTER_PLATFORMS: ReadonlySet<PlatformHint> = new Set([
   "substack",
   "beehiiv",
   "ghost",
+]);
+
+// Domains Cited categorically refuses to assess. These are
+// user-generated-content platforms whose HTML can superficially look
+// news-shaped — Reddit threads have bylines (usernames), recent
+// activity, and structured schema; X posts have author metadata; etc.
+// But they aren't editorial publications, and a green verdict on a
+// Reddit thread would be misleading regardless of what the signals
+// say. Hard-red is the only honest answer.
+//
+// Deliberately NOT included: publishing platforms (medium.com,
+// substack.com, beehiiv.com, ghost.org) — those host real publications
+// on subdomains and custom domains, and the existing newsletter-
+// platform override handles editorial use correctly.
+const SOCIAL_PLATFORM_DENYLIST: ReadonlySet<string> = new Set([
+  // UGC / social networks
+  "reddit.com",
+  "old.reddit.com",
+  "new.reddit.com",
+  "np.reddit.com",
+  "twitter.com",
+  "x.com",
+  "mobile.twitter.com",
+  "facebook.com",
+  "m.facebook.com",
+  "instagram.com",
+  "threads.net",
+  "tiktok.com",
+  "youtube.com",
+  "m.youtube.com",
+  "youtu.be",
+  "linkedin.com",
+  "pinterest.com",
+  "tumblr.com",
+  "bsky.app",
+  "mastodon.social",
+  "snapchat.com",
+  // Discussion / aggregators
+  "news.ycombinator.com",
+  "digg.com",
+  "flipboard.com",
+  // Image / video sharing
+  "imgur.com",
 ]);
 
 // Paths that look like first-segments but aren't editorial sections.
@@ -885,6 +929,53 @@ export async function runPreflight(
 ): Promise<PreflightSignal> {
   const fetchedAt = new Date().toISOString();
 
+  // Social-platform denylist short-circuits before any fetches. Skips
+  // homepage / Wikipedia / article sampling entirely — there's no
+  // analysis to do on a Reddit thread or X post that would change the
+  // verdict. The translator turns this into a hard not_news.
+  if (SOCIAL_PLATFORM_DENYLIST.has(rootDomain)) {
+    return {
+      rootDomain,
+      fetchedAt,
+      status: "ok",
+      homepage: {
+        fetchedUrl: `https://${rootDomain}/`,
+        status: "ok",
+        httpStatus: null,
+        ogSiteName: null,
+        ogType: null,
+        metaGenerator: null,
+        sectionNavCount: 0,
+        sectionNavSamples: [],
+        newsroomLinkCount: 0,
+        newsroomLinkSamples: [],
+        commerceFingerprints: [],
+      },
+      articles: {
+        source: "none",
+        sampledUrls: [],
+        fetchCount: 0,
+        jsonLdNewsArticleCount: 0,
+        jsonLdGenericArticleCount: 0,
+        distinctBylines: [],
+        authorMetaTagHits: 0,
+        recentArticleCount: 0,
+      },
+      wikipedia: null,
+      platform: null,
+      newsletterPlatformOverride: false,
+      socialPlatformDenied: true,
+      score: 0,
+      reasons: [
+        {
+          signal: "social_platform",
+          delta: 0,
+          detail: `${rootDomain} is a social-media platform — Cited only assesses editorial publications.`,
+        },
+      ],
+    };
+  }
+
   const { parsed: homepage, html } = await fetchHomepage(rootDomain);
 
   if (homepage.status === "error") {
@@ -916,6 +1007,7 @@ export async function runPreflight(
       wikipedia,
       platform: null,
       newsletterPlatformOverride: false,
+      socialPlatformDenied: false,
       score: total,
       reasons,
     };
@@ -951,6 +1043,7 @@ export async function runPreflight(
     wikipedia,
     platform,
     newsletterPlatformOverride,
+    socialPlatformDenied: false,
     score: total,
     reasons,
   };
