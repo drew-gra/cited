@@ -37,11 +37,22 @@ export default function MethodologyPage() {
           so you can replicate the work yourself.
         </p>
         <p className="max-w-prose text-gray-400">
-          v1 of Cited implements Layers 1–5 in production. Layer 6 (external
-          dataset cross-reference) and Layer 7 (end-to-end product probing)
-          are out of scope for v1 and described below.
+          v1 of Cited implements a preflight news-outlet check plus Layers
+          1–5 in production. Layer 6 (external dataset cross-reference)
+          and Layer 7 (end-to-end product probing) are out of scope for v1
+          and described below.
         </p>
       </header>
+
+      <Section
+        title="Preflight — News-outlet classification"
+        status="Live"
+        body={[
+          "Cited only assesses news outlets. Before the main pipeline runs, a preflight layer collects evidence that the submitted URL is a real editorial operation and classifies the result as news, borderline, or not-news. Not-news classifications skip Layers 1–5 entirely; borderline classifications proceed with a noisier-verdict warning.",
+          "Signals stack across three sources. From the homepage we read the OpenGraph site name and type, the page generator (which often names a hosting platform), the breadth of topical sections in the nav, and counter-signals for e-commerce platforms. From a small sample of recent articles we parse JSON-LD schema.org types (NewsArticle being the strongest single signal), distinct bylines across articles, author metadata, and publish-date freshness. From Wikipedia we check whether an article exists that references this domain — a free proxy for the domain-authority signal a paid SEO tool would otherwise provide.",
+          "Each signal contributes a small positive or negative weight to a transparent score. Newsletter platforms (Substack, Beehiiv, Ghost) require enough infrastructure investment that they're unlikely to host half-hearted corporate marketing, so a detected newsletter platform is treated as news regardless of score. Every contributing signal — positive or negative — is shown in the evidence panel so the verdict is auditable rather than opaque.",
+        ]}
+      />
 
       <Section
         title="Layer 1 — robots.txt"

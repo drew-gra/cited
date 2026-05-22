@@ -152,6 +152,19 @@ function parseSitemap(xml: string): {
 const NON_ARTICLE_SUBSITEMAP_RE =
   /\/(?:eletter|newsletter|podcast|archive|press[-_]?release|video|gallery|tag|category|author)/i;
 
+// Some sitemap-generator plugins (notably Google XML Sitemap Generator
+// on WordPress, used by msmagazine.com and others) batch posts into
+// `post-sitemap.xml`, `post-sitemap2.xml`, ... `post-sitemapN.xml`,
+// with the OLDEST posts in the unnumbered file and the NEWEST in the
+// highest-numbered file. All sub-sitemaps share the same `lastmod`
+// (the index regeneration time), so a plain lastmod sort ends up
+// returning oldest-first on these sites. Extracting the trailing
+// numeric suffix lets us break the tie in favor of newer batches.
+function trailingSitemapNumber(url: string): number {
+  const m = url.match(/(\d+)\.xml(?:\.gz)?(?:[?#].*)?$/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function pickSubSitemap(subs: SitemapEntry[]): SitemapEntry | null {
   if (subs.length === 0) return null;
   // First, eliminate sub-sitemaps that hold non-article content. Fall back
@@ -169,10 +182,16 @@ function pickSubSitemap(subs: SitemapEntry[]): SitemapEntry | null {
   );
   const candidates = positiveSignal.length > 0 ? positiveSignal : pool;
   const sorted = [...candidates].sort((a, b) => {
-    if (a.lastmod && b.lastmod) return b.lastmod.localeCompare(a.lastmod);
-    if (a.lastmod) return -1;
-    if (b.lastmod) return 1;
-    return 0;
+    if (a.lastmod && b.lastmod) {
+      const lc = b.lastmod.localeCompare(a.lastmod);
+      if (lc !== 0) return lc;
+    } else if (a.lastmod) return -1;
+    else if (b.lastmod) return 1;
+    // Tiebreaker: highest numeric suffix wins. Handles the
+    // `post-sitemap.xml` → `post-sitemap10.xml` ordering case where
+    // every sub-sitemap shares a lastmod and the newest content lives
+    // in the highest-numbered file.
+    return trailingSitemapNumber(b.loc) - trailingSitemapNumber(a.loc);
   });
   return sorted[0];
 }

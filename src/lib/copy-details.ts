@@ -1,5 +1,6 @@
 import type { AssessResponse, LayerNumber } from "./api-types";
 import type { LayerVerdict } from "./verdicts";
+import { PREFLIGHT_FINDING_LABEL } from "./preflight-verdicts";
 
 const LAYER_NAME: Record<LayerNumber, string> = {
   1: "Layer 1 — robots.txt",
@@ -8,6 +9,8 @@ const LAYER_NAME: Record<LayerNumber, string> = {
   4: "Layer 4 — User-agent A/B probing",
   5: "Layer 5 — Common Crawl presence",
 };
+
+const PREFLIGHT_NAME = "Preflight — News-outlet classification";
 
 function header(
   layer: LayerNumber,
@@ -267,4 +270,82 @@ export function formatLayerMarkdown(
     case 5:
       return data.layer5Signal ? formatLayer5(data) : null;
   }
+}
+
+export function formatPreflightMarkdown(data: AssessResponse): string | null {
+  const sig = data.preflightSignal;
+  if (!sig) return null;
+  const v = data.preflightVerdict;
+  const snap = data.run.preflight;
+  const lines = [
+    `# ${PREFLIGHT_NAME}`,
+    "",
+    `- **Outlet:** ${data.outlet.rootDomain}`,
+    `- **Captured:** ${snap.capturedAt ?? "—"}`,
+    `- **Run ID:** ${data.id}`,
+    `- **Verdict:** ${PREFLIGHT_FINDING_LABEL[v.finding].toUpperCase()} — ${v.headline}`,
+    `- **Score:** ${v.score}`,
+    "",
+    "---",
+    "",
+  ];
+  let body = lines.join("\n");
+
+  body += `## Homepage signals\n\n`;
+  body += `- **Hosting platform:** ${sig.platform ?? "unknown"}${
+    sig.newsletterPlatformOverride ? " (newsletter platform — policy override)" : ""
+  }\n`;
+  body += `- **og:site_name:** ${sig.homepage.ogSiteName ?? "—"}\n`;
+  body += `- **og:type:** ${sig.homepage.ogType ?? "—"}\n`;
+  body += `- **Section nav matches:** ${sig.homepage.sectionNavCount}${
+    sig.homepage.sectionNavSamples.length > 0
+      ? ` (${sig.homepage.sectionNavSamples.join(", ")})`
+      : ""
+  }\n`;
+  body += `- **Newsroom pages found:** ${sig.homepage.newsroomLinkCount}${
+    sig.homepage.newsroomLinkSamples.length > 0
+      ? ` (${sig.homepage.newsroomLinkSamples.join(", ")})`
+      : ""
+  }\n`;
+  body += `- **Commerce fingerprints:** ${
+    sig.homepage.commerceFingerprints.length > 0
+      ? sig.homepage.commerceFingerprints.join(", ")
+      : "none"
+  }\n\n`;
+
+  body += `## Article samples\n\n`;
+  body += `- **Source:** ${sig.articles.source}\n`;
+  body += `- **URLs sampled:** ${sig.articles.sampledUrls.length}\n`;
+  body += `- **Successful fetches:** ${sig.articles.fetchCount}\n`;
+  body += `- **JSON-LD NewsArticle:** ${sig.articles.jsonLdNewsArticleCount}\n`;
+  body += `- **JSON-LD generic Article:** ${sig.articles.jsonLdGenericArticleCount}\n`;
+  body += `- **Articles with author metadata:** ${sig.articles.authorMetaTagHits}\n`;
+  body += `- **Distinct bylines:** ${sig.articles.distinctBylines.length}${
+    sig.articles.distinctBylines.length > 0
+      ? ` (${sig.articles.distinctBylines.slice(0, 5).join(", ")}${
+          sig.articles.distinctBylines.length > 5 ? ", …" : ""
+        })`
+      : ""
+  }\n`;
+  body += `- **Recent articles (last 60d):** ${sig.articles.recentArticleCount}\n\n`;
+
+  body += `## Wikipedia lookup\n\n`;
+  if (!sig.wikipedia) {
+    body += `Not attempted.\n\n`;
+  } else if (sig.wikipedia.status === "found") {
+    body += `Found — "${sig.wikipedia.matchedTitle}" references this domain. Searched: "${sig.wikipedia.queriedTerm}".\n\n`;
+  } else if (sig.wikipedia.status === "not_found") {
+    body += `No matching article — searched: "${sig.wikipedia.queriedTerm}".\n\n`;
+  } else {
+    body += `Error — ${sig.wikipedia.errorMessage ?? "unknown"}.\n\n`;
+  }
+
+  if (v.reasons.length > 0) {
+    body += `## Score breakdown\n\n`;
+    for (const r of v.reasons) {
+      const sign = r.delta > 0 ? `+${r.delta}` : `${r.delta}`;
+      body += `- **${sign}** \`${r.signal}\` — ${r.detail}\n`;
+    }
+  }
+  return body;
 }

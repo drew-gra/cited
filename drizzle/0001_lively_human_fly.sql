@@ -1,0 +1,1 @@
+ALTER TABLE "assessment_runs" ADD COLUMN "preflight_status" text DEFAULT 'pending' NOT NULL;

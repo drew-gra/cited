@@ -6,12 +6,26 @@ import { outlets, assessmentRuns, signals } from "@/lib/db/schema";
 import { normalizeUrl } from "@/lib/domain";
 import { checkAndRecordIpRateLimit } from "@/lib/rate-limit";
 import { inngest } from "@/lib/inngest/client";
+import { verdictForPreflight } from "@/lib/preflight-verdicts";
+import type { PreflightSignal } from "@/lib/layers/preflight";
 
 // Layers the Inngest workflow currently runs end-to-end. The cache check
 // only short-circuits when every one of these has a fresh signal AND the
-// most-recent run has all of them marked done (not skipped). Add layers
-// here as they ship.
-const IMPLEMENTED_LAYERS = [1, 2, 3, 4, 5] as const;
+// most-recent run has all of them marked done (not skipped). 0 is the
+// preflight (news-outlet classification) gate; 1-5 are the main pipeline.
+const IMPLEMENTED_LAYERS = [0, 1, 2, 3, 4, 5] as const;
+
+async function loadLatestPreflightSignal(
+  outletId: string,
+): Promise<PreflightSignal | null> {
+  const [row] = await db
+    .select()
+    .from(signals)
+    .where(and(eq(signals.outletId, outletId), eq(signals.layer, 0)))
+    .orderBy(desc(signals.capturedAt))
+    .limit(1);
+  return row ? (row.signalValue as PreflightSignal) : null;
+}
 
 const bodySchema = z.object({
   url: z.string().min(1),
@@ -90,6 +104,35 @@ export async function POST(req: NextRequest) {
     freshnessPairs,
   );
 
+  // If preflight is fresh and says not_news, surface the most recent run
+  // whose preflight reflected that verdict — no point spinning up the
+  // pipeline again to skip every gated layer. Otherwise the regular
+  // freshness logic applies.
+  const preflightSignalForGate = await loadLatestPreflightSignal(outletId);
+  const cachedPreflightVerdict = verdictForPreflight(preflightSignalForGate);
+  const preflightFresh = freshness[0] === true;
+  if (
+    !parsed.forceRefresh &&
+    preflightFresh &&
+    cachedPreflightVerdict.finding === "not_news"
+  ) {
+    const [recentNotNewsRun] = await db
+      .select()
+      .from(assessmentRuns)
+      .where(
+        and(
+          eq(assessmentRuns.outletId, outletId),
+          eq(assessmentRuns.status, "done"),
+          eq(assessmentRuns.preflightStatus, "done"),
+        ),
+      )
+      .orderBy(desc(assessmentRuns.createdAt))
+      .limit(1);
+    if (recentNotNewsRun) {
+      return NextResponse.json({ id: recentNotNewsRun.id, cached: true });
+    }
+  }
+
   const allFresh = IMPLEMENTED_LAYERS.every((l) => freshness[l]);
 
   // Cache hit: every implemented layer is fresh, AND a prior run exists
@@ -102,6 +145,7 @@ export async function POST(req: NextRequest) {
         and(
           eq(assessmentRuns.outletId, outletId),
           eq(assessmentRuns.status, "done"),
+          eq(assessmentRuns.preflightStatus, "done"),
           eq(assessmentRuns.layer1Status, "done"),
           eq(assessmentRuns.layer2Status, "done"),
           eq(assessmentRuns.layer3Status, "done"),
@@ -136,10 +180,23 @@ export async function POST(req: NextRequest) {
 
   // Pre-mark layers as "done" for layers we're reusing from prior runs; the
   // Inngest workflow will transition the layers in layersToRun through
-  // running → done.
-  const layerInitialStatus = (layer: 1 | 2 | 3 | 4 | 5) => {
+  // running → done. Preflight has its own status column outside the
+  // 1-5 grid because it gates the rest of the pipeline.
+  const layerInitialStatus = (layer: 0 | 1 | 2 | 3 | 4 | 5) => {
     if (layersToRun.includes(layer)) return "pending" as const;
     return "done" as const;
+  };
+
+  // If preflight is fresh and definitively not_news, mark the gated
+  // pipeline layers as skipped up front so the polling UI doesn't
+  // briefly flash them as "pending" before the workflow short-circuits.
+  const willShortCircuit =
+    !layersToRun.includes(0) &&
+    cachedPreflightVerdict.finding === "not_news";
+
+  const gatedLayerInitialStatus = (layer: 1 | 2 | 3 | 4 | 5) => {
+    if (willShortCircuit) return "skipped" as const;
+    return layerInitialStatus(layer);
   };
 
   const [newRun] = await db
@@ -148,11 +205,12 @@ export async function POST(req: NextRequest) {
       outletId,
       ipAddress: ip,
       forceRefresh: parsed.forceRefresh,
-      layer1Status: layerInitialStatus(1),
-      layer2Status: layerInitialStatus(2),
-      layer3Status: layerInitialStatus(3),
-      layer4Status: layerInitialStatus(4),
-      layer5Status: layerInitialStatus(5),
+      preflightStatus: layerInitialStatus(0),
+      layer1Status: gatedLayerInitialStatus(1),
+      layer2Status: gatedLayerInitialStatus(2),
+      layer3Status: gatedLayerInitialStatus(3),
+      layer4Status: gatedLayerInitialStatus(4),
+      layer5Status: gatedLayerInitialStatus(5),
     })
     .returning({ id: assessmentRuns.id });
 

@@ -17,8 +17,10 @@ import type { RobotsLayer1Result } from "@/lib/layers/robots";
 import type { L2Result } from "@/lib/layers/declarations";
 import type { L4Result } from "@/lib/layers/ua-probing";
 import type { L5Result } from "@/lib/layers/common-crawl";
+import type { PreflightSignal } from "@/lib/layers/preflight";
 import { detectCdn, type L3Result } from "@/lib/layers/cdn";
 import { buildLayerVerdicts } from "@/lib/verdicts";
+import { verdictForPreflight } from "@/lib/preflight-verdicts";
 import { derivePostures } from "@/lib/posture";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -59,7 +61,7 @@ export async function GET(_: Request, { params }: RouteContext) {
   }
 
   const buildLayerSnapshot = (
-    layer: LayerNumber,
+    layer: LayerNumber | 0,
     status: LayerStatus,
   ): LayerSnapshot => {
     const signal = latestPerLayer.get(layer);
@@ -74,6 +76,10 @@ export async function GET(_: Request, { params }: RouteContext) {
       isStale: ageSeconds >= signal.ttlSeconds,
     };
   };
+
+  const preflightSignal =
+    (latestPerLayer.get(0)?.signalValue as PreflightSignal | undefined) ?? null;
+  const preflightVerdict = verdictForPreflight(preflightSignal);
 
   const layer1Signal =
     (latestPerLayer.get(1)?.signalValue as RobotsLayer1Result | undefined) ??
@@ -130,6 +136,7 @@ export async function GET(_: Request, { params }: RouteContext) {
     },
     run: {
       status: run.status as RunStatus,
+      preflight: buildLayerSnapshot(0, run.preflightStatus as LayerStatus),
       layers: {
         1: buildLayerSnapshot(1, run.layer1Status as LayerStatus),
         2: buildLayerSnapshot(2, run.layer2Status as LayerStatus),
@@ -142,6 +149,8 @@ export async function GET(_: Request, { params }: RouteContext) {
       updatedAt: run.updatedAt.toISOString(),
     },
     assessments: postures,
+    preflightSignal,
+    preflightVerdict,
     layer1Signal,
     layer2Signal,
     layer3Signal,

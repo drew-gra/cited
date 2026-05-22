@@ -10,7 +10,9 @@ import type { L2Result } from "./layers/declarations";
 import type { L3Result } from "./layers/cdn";
 import type { L4Result } from "./layers/ua-probing";
 import type { L5Result } from "./layers/common-crawl";
+import type { PreflightSignal } from "./layers/preflight";
 import type { LayerVerdict } from "./verdicts";
+import type { PreflightVerdict } from "./preflight-verdicts";
 import type { ConfidenceBand } from "./posture";
 
 export type LayerNumber = 1 | 2 | 3 | 4 | 5;
@@ -40,12 +42,15 @@ export type AssessResponse = {
   };
   run: {
     status: RunStatus;
+    preflight: LayerSnapshot;
     layers: Record<LayerNumber, LayerSnapshot>;
     errorMessage: string | null;
     createdAt: string;
     updatedAt: string;
   };
   assessments: PlatformAssessment[];
+  preflightSignal: PreflightSignal | null;
+  preflightVerdict: PreflightVerdict;
   layer1Signal: RobotsLayer1Result | null;
   layer2Signal: L2Result | null;
   layer3Signal: L3Result | null;

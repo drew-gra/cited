@@ -42,6 +42,7 @@ export const assessmentRuns = pgTable("assessment_runs", {
     .notNull()
     .references(() => outlets.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("pending"),
+  preflightStatus: text("preflight_status").notNull().default("pending"),
   layer1Status: text("layer1_status").notNull().default("pending"),
   layer2Status: text("layer2_status").notNull().default("pending"),
   layer3Status: text("layer3_status").notNull().default("pending"),

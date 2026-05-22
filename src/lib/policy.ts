@@ -1,4 +1,9 @@
 export const TTL_SECONDS = {
+  // L0 (preflight / news-outlet classification) stays cached for a week
+  // because its signals — schema markup, Wikipedia presence, section
+  // structure, hosting platform — move on month-scale and the same URL
+  // shouldn't flip news/not-news between consecutive assessments.
+  layer0: 7 * 24 * 60 * 60,
   layer1: 24 * 60 * 60,
   layer2: 24 * 60 * 60,
   layer3: 30 * 24 * 60 * 60,

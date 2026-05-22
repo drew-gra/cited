@@ -23,6 +23,8 @@ import {
   type L4Probe,
   type L4Result,
 } from "../layers/ua-probing";
+import { runPreflight, type PreflightSignal } from "../layers/preflight";
+import { verdictForPreflight } from "../preflight-verdicts";
 import { BASELINE_USER_AGENT, TTL_SECONDS } from "../policy";
 import { BOTS } from "../ai-platforms";
 import { derivePostures } from "../posture";
@@ -50,7 +52,11 @@ export const assessOutlet = inngest.createFunction(
       layersToRun?: number[];
     };
     const { runId, outletId, rootDomain } = data;
-    const layersToRun = new Set(data.layersToRun ?? [1, 2, 3, 4, 5]);
+    // Layer numbering: 0 = preflight, 1-5 = existing pipeline. Preflight
+    // is included in the standard "run everything" default because new
+    // outlets always need it; surgical-refresh runs may omit it when L0
+    // is fresh and definitively news/borderline.
+    const layersToRun = new Set(data.layersToRun ?? [0, 1, 2, 3, 4, 5]);
 
     await step.run("mark-running", () =>
       db
@@ -58,6 +64,85 @@ export const assessOutlet = inngest.createFunction(
         .set({ status: "running", updatedAt: new Date() })
         .where(eq(assessmentRuns.id, runId)),
     );
+
+    // ----- Layer 0: Preflight (is this a news outlet?) -----
+    // Always evaluate the latest L0 verdict — even when L0 itself was
+    // reused from a prior run — because if it says not_news we MUST
+    // skip L1-L5 (those layers carry no signal value for non-news URLs
+    // and would be misleading to display).
+    if (layersToRun.has(0)) {
+      await step.run("mark-l0-running", () =>
+        db
+          .update(assessmentRuns)
+          .set({ preflightStatus: "running", updatedAt: new Date() })
+          .where(eq(assessmentRuns.id, runId)),
+      );
+
+      const preflight = await step.run("layer-0-preflight", () =>
+        runPreflight(rootDomain),
+      );
+
+      await step.run("layer-0-persist", async () => {
+        await db.insert(signals).values({
+          outletId,
+          layer: 0,
+          signalType: "preflight",
+          signalValue: preflight,
+          ttlSeconds: TTL_SECONDS.layer0,
+        });
+        await db
+          .update(assessmentRuns)
+          .set({ preflightStatus: "done", updatedAt: new Date() })
+          .where(eq(assessmentRuns.id, runId));
+      });
+    }
+
+    // Load the latest preflight signal (either just-computed or reused
+    // from a prior run if L0 wasn't in layersToRun) and decide whether
+    // to short-circuit the pipeline.
+    const preflightVerdict = await step.run(
+      "evaluate-preflight",
+      async () => {
+        const [row] = await db
+          .select()
+          .from(signals)
+          .where(and(eq(signals.outletId, outletId), eq(signals.layer, 0)))
+          .orderBy(desc(signals.capturedAt))
+          .limit(1);
+        const signal = row
+          ? (row.signalValue as PreflightSignal)
+          : null;
+        return verdictForPreflight(signal);
+      },
+    );
+
+    if (preflightVerdict.finding === "not_news") {
+      // Refuse to assess. Mark L1-L5 skipped, finalize the run, and
+      // return. The UI surfaces the preflight evidence so the user can
+      // see why and contest if appropriate.
+      await step.run("not-news-short-circuit", async () => {
+        await db
+          .update(assessmentRuns)
+          .set({
+            status: "done",
+            layer1Status: "skipped",
+            layer2Status: "skipped",
+            layer3Status: "skipped",
+            layer4Status: "skipped",
+            layer5Status: "skipped",
+            updatedAt: new Date(),
+          })
+          .where(eq(assessmentRuns.id, runId));
+        await db
+          .update(outlets)
+          .set({
+            firstAssessedAt: sql`COALESCE(${outlets.firstAssessedAt}, NOW())`,
+            lastFullAssessmentAt: new Date(),
+          })
+          .where(eq(outlets.id, outletId));
+      });
+      return { runId, preflight: preflightVerdict.finding, layersRun: [0] };
+    }
 
     // ----- Layer 1: robots.txt -----
     if (layersToRun.has(1)) {

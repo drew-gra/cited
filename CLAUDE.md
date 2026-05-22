@@ -140,10 +140,28 @@ maintained on the user's Drive). Hard constraints:
 
 ## What's done, what's open
 
-**Done in v1:** L1, L2, L3, L4, L5, platform detector, surgical refresh cache,
-LayerVerdict shape + translators for every layer, per-layer expandable
-evidence panels (including L4's per-bot verdicts + raw probe table),
-methodology page, IP rate limit, basePath rewrite-friendly URL handling.
+**Done in v1:** L0 (preflight news-outlet classification), L1, L2, L3, L4,
+L5, platform detector, surgical refresh cache, LayerVerdict shape +
+translators for every layer, per-layer expandable evidence panels
+(including L4's per-bot verdicts + raw probe table), methodology page,
+IP rate limit, basePath rewrite-friendly URL handling.
+
+**Preflight (L0) hardening — follow-ups:**
+- Newsroom-pages detector matches exact paths (`/about`, `/staff`, etc.).
+  Misses common variants like `/about-us`, `/our-team`, `/who-we-are`.
+  Expand or switch to substring matching with a short denylist.
+- Wikipedia search is English-only (`en.wikipedia.org`). Non-English
+  outlets won't get the +3 even when a matching article exists on the
+  appropriate language Wikipedia. Probably defer until a real
+  non-English test case appears.
+- Score thresholds (≥5 / 2–4 / ≤1) are a first guess. Should be
+  calibrated against a labeled corpus of known-news / known-not-news
+  URLs once one exists.
+- Article-sample fetches happen serially with a 1s politeness pause —
+  meaningful latency on L0, which is on the critical path before the
+  rest of the pipeline. Consider parallelizing the homepage + Wikipedia
+  + first-article fetch (per-domain politeness still applies for
+  same-host article samples).
 
 **Pending in v1:**
 - **S4b (posture rule table)** — currently per-platform postures are
