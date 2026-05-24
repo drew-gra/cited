@@ -12,6 +12,13 @@ const LAYER_NAME: Record<LayerNumber, string> = {
 
 const PREFLIGHT_NAME = "Preflight — News-outlet classification";
 
+const ATTRIBUTION_FOOTER = "\n---\n\nAnalysis from Cited by Bread & Law\n";
+
+function withAttribution(body: string | null): string | null {
+  if (!body) return null;
+  return body.endsWith("\n") ? body + ATTRIBUTION_FOOTER : body + "\n" + ATTRIBUTION_FOOTER;
+}
+
 function header(
   layer: LayerNumber,
   data: AssessResponse,
@@ -260,15 +267,15 @@ export function formatLayerMarkdown(
 ): string | null {
   switch (layer) {
     case 1:
-      return data.layer1Signal ? formatLayer1(data) : null;
+      return withAttribution(data.layer1Signal ? formatLayer1(data) : null);
     case 2:
-      return data.layer2Signal ? formatLayer2(data) : null;
+      return withAttribution(data.layer2Signal ? formatLayer2(data) : null);
     case 3:
-      return data.layer3Signal ? formatLayer3(data) : null;
+      return withAttribution(data.layer3Signal ? formatLayer3(data) : null);
     case 4:
-      return data.layer4Signal ? formatLayer4(data) : null;
+      return withAttribution(data.layer4Signal ? formatLayer4(data) : null);
     case 5:
-      return data.layer5Signal ? formatLayer5(data) : null;
+      return withAttribution(data.layer5Signal ? formatLayer5(data) : null);
   }
 }
 
@@ -347,5 +354,5 @@ export function formatPreflightMarkdown(data: AssessResponse): string | null {
       body += `- **${sign}** \`${r.signal}\` — ${r.detail}\n`;
     }
   }
-  return body;
+  return withAttribution(body);
 }
