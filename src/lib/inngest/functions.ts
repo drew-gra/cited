@@ -3,31 +3,21 @@ import { inngest } from "./client";
 import { db } from "../db";
 import {
   outlets,
-  assessments,
   signals,
   assessmentRuns,
   probeLog,
 } from "../db/schema";
-import { fetchAndParseRobots } from "../layers/robots";
-import type { RobotsLayer1Result } from "../layers/robots";
-import { fetchL2 } from "../layers/declarations";
-import type { L2Result } from "../layers/declarations";
+import { fetchAndParseRobots, robotsLayer1ResultSchema } from "../layers/robots";
+import { fetchL2, l2ResultSchema } from "../layers/declarations";
 import { detectCdn } from "../layers/cdn";
-import type { L3Result } from "../layers/cdn";
 import { fetchCommonCrawlPresence } from "../layers/common-crawl";
-import type { L5Result } from "../layers/common-crawl";
 import { findSampleArticleUrls } from "../layers/sitemap";
-import {
-  probeUrl,
-  summarizeL4,
-  type L4Probe,
-  type L4Result,
-} from "../layers/ua-probing";
-import { runPreflight, type PreflightSignal } from "../layers/preflight";
+import { probeUrl, summarizeL4, type L4Probe } from "../layers/ua-probing";
+import { runPreflight, preflightSignalSchema } from "../layers/preflight";
 import { verdictForPreflight } from "../preflight-verdicts";
 import { BASELINE_USER_AGENT, TTL_SECONDS } from "../policy";
 import { BOTS } from "../ai-platforms";
-import { derivePostures } from "../posture";
+import { parseSignal } from "../db/queries";
 
 export const assessOutlet = inngest.createFunction(
   {
@@ -109,9 +99,10 @@ export const assessOutlet = inngest.createFunction(
           .where(and(eq(signals.outletId, outletId), eq(signals.layer, 0)))
           .orderBy(desc(signals.capturedAt))
           .limit(1);
-        const signal = row
-          ? (row.signalValue as PreflightSignal)
-          : null;
+        const signal = parseSignal(row, preflightSignalSchema, {
+          outletId,
+          layer: 0,
+        });
         return verdictForPreflight(signal);
       },
     );
@@ -225,11 +216,11 @@ export const assessOutlet = inngest.createFunction(
           .where(and(eq(signals.outletId, outletId), eq(signals.layer, 2)))
           .orderBy(desc(signals.capturedAt))
           .limit(1);
-        if (!latestL2) return {} as Record<string, string>;
-        const value = latestL2.signalValue as {
-          homepage?: { responseHeaders?: Record<string, string> };
-        };
-        return value.homepage?.responseHeaders ?? {};
+        const value = parseSignal(latestL2, l2ResultSchema, {
+          outletId,
+          layer: 2,
+        });
+        return value?.homepage.responseHeaders ?? {};
       });
 
       const cdnResult = await step.run("layer-3-detect", () =>
@@ -278,9 +269,11 @@ export const assessOutlet = inngest.createFunction(
             .where(and(eq(signals.outletId, outletId), eq(signals.layer, 1)))
             .orderBy(desc(signals.capturedAt))
             .limit(1);
-          if (!latestL1) return [] as string[];
-          const value = latestL1.signalValue as { sitemaps?: string[] };
-          return value.sitemaps ?? [];
+          const value = parseSignal(latestL1, robotsLayer1ResultSchema, {
+            outletId,
+            layer: 1,
+          });
+          return value?.sitemaps ?? [];
         },
       );
 
@@ -366,52 +359,13 @@ export const assessOutlet = inngest.createFunction(
       });
     }
 
-    // ----- Compute per-platform assessments (S4b rule table) -----
-    // Read latest signals for all five layers from the DB rather than
-    // step-local variables; with surgical refresh, any subset of the
-    // layers may have been reused from a prior run rather than refetched
-    // in this invocation. The rule logic lives in src/lib/posture.ts.
-    await step.run("compute-postures", async () => {
-      const latestForLayer = async <T>(layer: number): Promise<T | null> => {
-        const [row] = await db
-          .select()
-          .from(signals)
-          .where(and(eq(signals.outletId, outletId), eq(signals.layer, layer)))
-          .orderBy(desc(signals.capturedAt))
-          .limit(1);
-        return row ? (row.signalValue as T) : null;
-      };
-
-      const [l1, l2, l3, l4, l5] = await Promise.all([
-        latestForLayer<RobotsLayer1Result>(1),
-        latestForLayer<L2Result>(2),
-        latestForLayer<L3Result>(3),
-        latestForLayer<L4Result>(4),
-        latestForLayer<L5Result>(5),
-      ]);
-
-      const postures = derivePostures({
-        layer1Signal: l1,
-        layer2Signal: l2,
-        layer3Signal: l3,
-        layer4Signal: l4,
-        layer5Signal: l5,
-      });
-
-      const rows = postures.map((p) => ({
-        outletId,
-        assessmentRunId: runId,
-        aiPlatform: p.platform,
-        trainingAccess: p.trainingAccess,
-        realtimeAccess: p.realtimeAccess,
-        searchAccess: p.searchAccess,
-        aggregatePosture: p.aggregatePosture,
-        confidence: p.confidence,
-      }));
-      if (rows.length > 0) await db.insert(assessments).values(rows);
-    });
-
     // ----- Finalize -----
+    // Per-platform postures are NOT persisted to the `assessments` table.
+    // The GET handler derives them live from the latest signals on every
+    // read (src/lib/posture.ts), so persisting them at write time would be
+    // dead weight and would freeze a snapshot of the rule logic that drifts
+    // away from live behavior as posture.ts evolves. The table is kept in
+    // the schema for now in case we want audit-trail persistence later.
     await step.run("finalize", async () => {
       await db
         .update(assessmentRuns)

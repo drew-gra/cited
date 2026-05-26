@@ -12,32 +12,40 @@
  * whether to lean harder on Layer 4 (UA probing) to verify.
  */
 
-export type CdnId =
-  | "cloudflare"
-  | "cloudfront"
-  | "fastly"
-  | "akamai"
-  | "vercel"
-  | "netlify"
-  | "imperva"
-  | "sucuri"
-  | "unknown";
+import { z } from "zod";
 
-export type L3Evidence = {
-  cdn: CdnId;
-  header: string;
-  value: string;
-  reason: string;
-};
+export const cdnIdSchema = z.enum([
+  "cloudflare",
+  "cloudfront",
+  "fastly",
+  "akamai",
+  "vercel",
+  "netlify",
+  "imperva",
+  "sucuri",
+  "unknown",
+]);
 
-export type L3Result = {
-  rootDomain: string;
-  fetchedAt: string;
-  /** CDNs detected. May contain multiple when stacks are layered
-   * (e.g., Cloudflare in front of a Vercel-hosted origin). */
-  detected: CdnId[];
-  evidence: L3Evidence[];
-};
+export const l3EvidenceSchema = z.object({
+  cdn: cdnIdSchema,
+  header: z.string(),
+  value: z.string(),
+  reason: z.string(),
+});
+
+// Runtime schema for the persisted L3 signal. Source of truth for the L3
+// shape — the TS types below are derived from it so the schema and types
+// can't drift.
+export const l3ResultSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  detected: z.array(cdnIdSchema),
+  evidence: z.array(l3EvidenceSchema),
+});
+
+export type CdnId = z.infer<typeof cdnIdSchema>;
+export type L3Evidence = z.infer<typeof l3EvidenceSchema>;
+export type L3Result = z.infer<typeof l3ResultSchema>;
 
 type Fingerprint = {
   cdn: CdnId;

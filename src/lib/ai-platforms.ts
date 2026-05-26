@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const PLATFORMS = [
   "anthropic",
   "openai",
@@ -5,9 +7,11 @@ export const PLATFORMS = [
   "google",
   "common_crawl",
 ] as const;
-export type AiPlatform = (typeof PLATFORMS)[number];
+export const aiPlatformSchema = z.enum(PLATFORMS);
+export type AiPlatform = z.infer<typeof aiPlatformSchema>;
 
-export type BotPurpose = "training" | "realtime" | "search";
+export const botPurposeSchema = z.enum(["training", "realtime", "search"]);
+export type BotPurpose = z.infer<typeof botPurposeSchema>;
 
 export type Bot = {
   ua: string;

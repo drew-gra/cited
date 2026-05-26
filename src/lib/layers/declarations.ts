@@ -10,42 +10,40 @@
  * shipping cheerio/jsdom for a handful of regexes.
  */
 
+import { z } from "zod";
 import { POLITENESS, userAgent } from "../policy";
 
-export type L2Homepage = {
-  fetchedUrl: string;
-  status: "ok" | "error";
-  httpStatus: number | null;
-  errorMessage?: string;
-  /** Raw X-Robots-Tag header value, if any. May contain comma-separated
-   * directives or UA-scoped directives like "GPTBot: noindex". */
-  xRobotsTag: string | null;
-  /** Content of <meta name="robots" content="..."> if present. */
-  metaRobots: string | null;
-  /** AI-bot-specific meta tags: <meta name="GPTBot" content="noindex">.
-   * Keyed by bot name, value is the content attribute. */
-  aiMetaTags: Record<string, string>;
-  /** Content of <meta name="ai-content-declaration" content="..."> if any. */
-  aiContentDeclaration: string | null;
-  /** Curated CDN/policy-relevant response headers, lowercased keys. Used as
-   * input to Layer 3 (CDN fingerprint) without a second fetch. */
-  responseHeaders: Record<string, string>;
-};
+export const l2HomepageSchema = z.object({
+  fetchedUrl: z.string(),
+  status: z.enum(["ok", "error"]),
+  httpStatus: z.number().nullable(),
+  errorMessage: z.string().optional(),
+  xRobotsTag: z.string().nullable(),
+  metaRobots: z.string().nullable(),
+  aiMetaTags: z.record(z.string(), z.string()),
+  aiContentDeclaration: z.string().nullable(),
+  responseHeaders: z.record(z.string(), z.string()),
+});
 
-export type L2LlmsTxt = {
-  url: string;
-  state: "present" | "absent" | "error";
-  httpStatus: number | null;
-  sizeBytes: number | null;
-  errorMessage?: string;
-};
+export const l2LlmsTxtSchema = z.object({
+  url: z.string(),
+  state: z.enum(["present", "absent", "error"]),
+  httpStatus: z.number().nullable(),
+  sizeBytes: z.number().nullable(),
+  errorMessage: z.string().optional(),
+});
 
-export type L2Result = {
-  rootDomain: string;
-  fetchedAt: string;
-  homepage: L2Homepage;
-  llmsTxt: L2LlmsTxt;
-};
+// Runtime schema for the persisted L2 signal. Source of truth.
+export const l2ResultSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  homepage: l2HomepageSchema,
+  llmsTxt: l2LlmsTxtSchema,
+});
+
+export type L2Homepage = z.infer<typeof l2HomepageSchema>;
+export type L2LlmsTxt = z.infer<typeof l2LlmsTxtSchema>;
+export type L2Result = z.infer<typeof l2ResultSchema>;
 
 // Meta names we want to capture. "robots" and "googlebot" are conventional;
 // the rest are AI-bot-specific names that some publishers use to scope

@@ -1,31 +1,36 @@
 import robotsParser from "robots-parser";
-import { BOTS, type AiPlatform, type BotPurpose } from "../ai-platforms";
+import { z } from "zod";
+import { BOTS, aiPlatformSchema, botPurposeSchema } from "../ai-platforms";
 import { POLITENESS, userAgent } from "../policy";
-import { detectPlatform, type PlatformDetection } from "./platform";
+import { detectPlatform, platformDetectionSchema } from "./platform";
 
-export type BotFinding = {
-  ua: string;
-  platform: AiPlatform;
-  purpose: BotPurpose;
-  rootAccess: "allowed" | "blocked" | "unknown";
-  matchedLineNumber: number | null;
-  matchedRule: string | null;
-  crawlDelay: number | null;
-};
+export const botFindingSchema = z.object({
+  ua: z.string(),
+  platform: aiPlatformSchema,
+  purpose: botPurposeSchema,
+  rootAccess: z.enum(["allowed", "blocked", "unknown"]),
+  matchedLineNumber: z.number().nullable(),
+  matchedRule: z.string().nullable(),
+  crawlDelay: z.number().nullable(),
+});
 
-export type RobotsLayer1Result = {
-  rootDomain: string;
-  fetchedAt: string;
-  fetchUrl: string;
-  fetchUserAgent: string;
-  status: "ok" | "not_found" | "error";
-  httpStatus: number | null;
-  rawText: string | null;
-  errorMessage?: string;
-  sitemaps: string[];
-  platform: PlatformDetection;
-  perBot: BotFinding[];
-};
+// Runtime schema for the persisted L1 signal. Source of truth.
+export const robotsLayer1ResultSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  fetchUrl: z.string(),
+  fetchUserAgent: z.string(),
+  status: z.enum(["ok", "not_found", "error"]),
+  httpStatus: z.number().nullable(),
+  rawText: z.string().nullable(),
+  errorMessage: z.string().optional(),
+  sitemaps: z.array(z.string()),
+  platform: platformDetectionSchema,
+  perBot: z.array(botFindingSchema),
+});
+
+export type BotFinding = z.infer<typeof botFindingSchema>;
+export type RobotsLayer1Result = z.infer<typeof robotsLayer1ResultSchema>;
 
 function unknownFindings(): BotFinding[] {
   return BOTS.map((bot) => ({

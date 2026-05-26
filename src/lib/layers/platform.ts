@@ -12,25 +12,25 @@
  * publications on each platform. Add new signatures only after verification.
  */
 
-export type PlatformId =
-  | "beehiiv"
-  | "substack"
-  | "ghost"
-  | "wordpress"
-  | "wix"
-  | "unknown";
+import { z } from "zod";
 
-export type PlatformDetection = {
-  platform: PlatformId;
-  /**
-   * True when we can confirm the file is the platform default boilerplate
-   * (publisher hasn't customized). False when the platform is detected but
-   * the file appears edited.
-   */
-  isDefault: boolean;
-  /** Short, user-facing explanation for the result page. */
-  note: string;
-};
+export const platformIdSchema = z.enum([
+  "beehiiv",
+  "substack",
+  "ghost",
+  "wordpress",
+  "wix",
+  "unknown",
+]);
+
+export const platformDetectionSchema = z.object({
+  platform: platformIdSchema,
+  isDefault: z.boolean(),
+  note: z.string(),
+});
+
+export type PlatformId = z.infer<typeof platformIdSchema>;
+export type PlatformDetection = z.infer<typeof platformDetectionSchema>;
 
 // Beehiiv ships a self-labeled default. The first comment line is literal.
 const BEEHIIV_DEFAULT_MARKER = /^\s*#\s*beehiiv default robots\.txt/im;

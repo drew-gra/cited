@@ -15,27 +15,34 @@
  * Translator is a pure function over the persisted L0 signal — same
  * shape and contract as the LayerFinding translators in verdicts.ts.
  */
+import { z } from "zod";
 import type { PreflightSignal } from "./layers/preflight";
 
-export type PreflightFinding = "news" | "borderline" | "not_news";
+export const preflightFindingSchema = z.enum([
+  "news",
+  "borderline",
+  "not_news",
+]);
+export const preflightConfidenceSchema = z.enum(["low", "medium", "high"]);
 
-export type PreflightConfidence = "low" | "medium" | "high";
+export const preflightReasonSchema = z.object({
+  signal: z.string(),
+  delta: z.number(),
+  detail: z.string(),
+});
 
-export type PreflightVerdict = {
-  finding: PreflightFinding;
-  headline: string;
-  confidence: PreflightConfidence;
-  score: number;
-  /** Human-readable reasons that contributed to the score, in the order
-   * they were evaluated. Used by the UI evidence panel. */
-  reasons: PreflightReason[];
-};
+export const preflightVerdictSchema = z.object({
+  finding: preflightFindingSchema,
+  headline: z.string(),
+  confidence: preflightConfidenceSchema,
+  score: z.number(),
+  reasons: z.array(preflightReasonSchema),
+});
 
-export type PreflightReason = {
-  signal: string;
-  delta: number;
-  detail: string;
-};
+export type PreflightFinding = z.infer<typeof preflightFindingSchema>;
+export type PreflightConfidence = z.infer<typeof preflightConfidenceSchema>;
+export type PreflightReason = z.infer<typeof preflightReasonSchema>;
+export type PreflightVerdict = z.infer<typeof preflightVerdictSchema>;
 
 export const PREFLIGHT_FINDING_LABEL: Record<PreflightFinding, string> = {
   news: "News outlet",

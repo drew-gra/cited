@@ -42,66 +42,78 @@
  * the way they could false-negative L4.
  */
 
+import { z } from "zod";
 import { BASELINE_USER_AGENT, POLITENESS } from "../policy";
+import { findSampleArticleUrls, sitemapSourceSchema } from "./sitemap";
 import {
-  findSampleArticleUrls,
-  type SitemapDiscoveryResult,
-} from "./sitemap";
-import { lookupWikipedia, type WikipediaLookupResult } from "./wikipedia";
-import type { PreflightReason } from "../preflight-verdicts";
+  lookupWikipedia,
+  wikipediaLookupResultSchema,
+  type WikipediaLookupResult,
+} from "./wikipedia";
+import {
+  preflightReasonSchema,
+  type PreflightReason,
+} from "../preflight-verdicts";
 
 const PREFLIGHT_FETCH_TIMEOUT_MS = 6_000;
 const PREFLIGHT_ARTICLE_SAMPLE_SIZE = 3;
 const RECENT_ARTICLE_WINDOW_DAYS = 60;
 
-export type PreflightSignal = {
-  rootDomain: string;
-  fetchedAt: string;
-  status: "ok" | "error";
-  errorMessage?: string;
-  homepage: PreflightHomepage;
-  articles: PreflightArticles;
-  wikipedia: WikipediaLookupResult | null;
-  platform: PlatformHint | null;
-  newsletterPlatformOverride: boolean;
-  socialPlatformDenied: boolean;
-  score: number;
-  reasons: PreflightReason[];
-};
+export const platformHintSchema = z.enum([
+  "substack",
+  "beehiiv",
+  "ghost",
+  "wordpress",
+  "wix",
+  "squarespace",
+]);
 
-export type PreflightHomepage = {
-  fetchedUrl: string;
-  status: "ok" | "error";
-  httpStatus: number | null;
-  errorMessage?: string;
-  ogSiteName: string | null;
-  ogType: string | null;
-  metaGenerator: string | null;
-  sectionNavCount: number;
-  sectionNavSamples: string[];
-  newsroomLinkCount: number;
-  newsroomLinkSamples: string[];
-  commerceFingerprints: string[];
-};
+export const preflightHomepageSchema = z.object({
+  fetchedUrl: z.string(),
+  status: z.enum(["ok", "error"]),
+  httpStatus: z.number().nullable(),
+  errorMessage: z.string().optional(),
+  ogSiteName: z.string().nullable(),
+  ogType: z.string().nullable(),
+  metaGenerator: z.string().nullable(),
+  sectionNavCount: z.number(),
+  sectionNavSamples: z.array(z.string()),
+  newsroomLinkCount: z.number(),
+  newsroomLinkSamples: z.array(z.string()),
+  commerceFingerprints: z.array(z.string()),
+});
 
-export type PreflightArticles = {
-  source: SitemapDiscoveryResult["source"];
-  sampledUrls: string[];
-  fetchCount: number;
-  jsonLdNewsArticleCount: number;
-  jsonLdGenericArticleCount: number;
-  distinctBylines: string[];
-  authorMetaTagHits: number;
-  recentArticleCount: number;
-};
+export const preflightArticlesSchema = z.object({
+  source: sitemapSourceSchema,
+  sampledUrls: z.array(z.string()),
+  fetchCount: z.number(),
+  jsonLdNewsArticleCount: z.number(),
+  jsonLdGenericArticleCount: z.number(),
+  distinctBylines: z.array(z.string()),
+  authorMetaTagHits: z.number(),
+  recentArticleCount: z.number(),
+});
 
-export type PlatformHint =
-  | "substack"
-  | "beehiiv"
-  | "ghost"
-  | "wordpress"
-  | "wix"
-  | "squarespace";
+// Runtime schema for the persisted L0 signal. Source of truth.
+export const preflightSignalSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  status: z.enum(["ok", "error"]),
+  errorMessage: z.string().optional(),
+  homepage: preflightHomepageSchema,
+  articles: preflightArticlesSchema,
+  wikipedia: wikipediaLookupResultSchema.nullable(),
+  platform: platformHintSchema.nullable(),
+  newsletterPlatformOverride: z.boolean(),
+  socialPlatformDenied: z.boolean(),
+  score: z.number(),
+  reasons: z.array(preflightReasonSchema),
+});
+
+export type PlatformHint = z.infer<typeof platformHintSchema>;
+export type PreflightHomepage = z.infer<typeof preflightHomepageSchema>;
+export type PreflightArticles = z.infer<typeof preflightArticlesSchema>;
+export type PreflightSignal = z.infer<typeof preflightSignalSchema>;
 
 const NEWSLETTER_PLATFORMS: ReadonlySet<PlatformHint> = new Set([
   "substack",

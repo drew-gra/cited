@@ -28,16 +28,24 @@
  */
 
 import { gunzipSync } from "node:zlib";
+import { z } from "zod";
 import { BASELINE_USER_AGENT } from "../policy";
 
-export type SitemapSource = "sitemap" | "rss" | "homepage" | "none";
+export const sitemapSourceSchema = z.enum([
+  "sitemap",
+  "rss",
+  "homepage",
+  "none",
+]);
 
-export type SitemapDiscoveryResult = {
-  urls: string[];
-  source: SitemapSource;
-  /** Where in the fallback chain we actually found URLs, for debugging. */
-  sourceUrl: string | null;
-};
+export const sitemapDiscoveryResultSchema = z.object({
+  urls: z.array(z.string()),
+  source: sitemapSourceSchema,
+  sourceUrl: z.string().nullable(),
+});
+
+export type SitemapSource = z.infer<typeof sitemapSourceSchema>;
+export type SitemapDiscoveryResult = z.infer<typeof sitemapDiscoveryResultSchema>;
 
 const SAMPLE_URLS_TARGET = 5;
 const RECENT_COUNT = 2;

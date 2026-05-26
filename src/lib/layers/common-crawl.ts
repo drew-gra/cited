@@ -16,40 +16,48 @@
  * apply. We fetch the six index queries in parallel.
  */
 
+import { z } from "zod";
 import { userAgent } from "../policy";
 
-export type CoverageBucket = "absent" | "low" | "moderate" | "high";
-export type Trend =
-  | "absent"
-  | "decreasing"
-  | "steady"
-  | "increasing"
-  | "insufficient_data";
+export const coverageBucketSchema = z.enum([
+  "absent",
+  "low",
+  "moderate",
+  "high",
+]);
+export const trendSchema = z.enum([
+  "absent",
+  "decreasing",
+  "steady",
+  "increasing",
+  "insufficient_data",
+]);
 
-export type CCIndexResult = {
-  indexName: string;
-  records: number;
-  /** True if the query hit our per-index record cap; the real count is >= records. */
-  capped: boolean;
-  /** Earliest captured-record timestamp (YYYYMMDDHHMMSS), if any. */
-  earliestSeen: string | null;
-  /** Latest captured-record timestamp (YYYYMMDDHHMMSS), if any. */
-  latestSeen: string | null;
-  error?: string;
-};
+export const ccIndexResultSchema = z.object({
+  indexName: z.string(),
+  records: z.number(),
+  capped: z.boolean(),
+  earliestSeen: z.string().nullable(),
+  latestSeen: z.string().nullable(),
+  error: z.string().optional(),
+});
 
-export type L5Result = {
-  rootDomain: string;
-  fetchedAt: string;
-  indexesQueried: number;
-  indexes: CCIndexResult[];
-  /** How many of the queried indexes returned at least one record. */
-  indexesPresent: number;
-  /** Sum of records across all queried indexes. Capped per index at PER_INDEX_LIMIT. */
-  totalRecords: number;
-  coverageBucket: CoverageBucket;
-  trend: Trend;
-};
+// Runtime schema for the persisted L5 signal. Source of truth.
+export const l5ResultSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  indexesQueried: z.number(),
+  indexes: z.array(ccIndexResultSchema),
+  indexesPresent: z.number(),
+  totalRecords: z.number(),
+  coverageBucket: coverageBucketSchema,
+  trend: trendSchema,
+});
+
+export type CoverageBucket = z.infer<typeof coverageBucketSchema>;
+export type Trend = z.infer<typeof trendSchema>;
+export type CCIndexResult = z.infer<typeof ccIndexResultSchema>;
+export type L5Result = z.infer<typeof l5ResultSchema>;
 
 const PER_INDEX_LIMIT = 1000;
 const COLLINFO_URL = "https://index.commoncrawl.org/collinfo.json";

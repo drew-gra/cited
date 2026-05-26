@@ -19,9 +19,13 @@
  */
 
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import { BASELINE_USER_AGENT, POLITENESS } from "../policy";
-import { BOTS, type AiPlatform, type BotPurpose } from "../ai-platforms";
-import type { SitemapDiscoveryResult, SitemapSource } from "./sitemap";
+import { BOTS, aiPlatformSchema, botPurposeSchema } from "../ai-platforms";
+import {
+  sitemapSourceSchema,
+  type SitemapDiscoveryResult,
+} from "./sitemap";
 
 // Cap body read for hashing. 200KB is enough to detect "soft-paywall stub
 // vs. full article" while keeping memory bounded for L4's 50 fetches.
@@ -55,68 +59,94 @@ const L4_RETRY_BACKOFF_MS = 2_000;
 const TARPIT_TIMEOUT_PROXIMITY_MS = 200;
 const TARPIT_BASELINE_RATIO_MAX = 0.25;
 
-export type L4ErrorKind = "timeout" | "connection" | "other" | null;
+export const l4ErrorKindSchema = z
+  .enum(["timeout", "connection", "other"])
+  .nullable();
 
-export type L4Probe = {
-  url: string;
-  userAgent: string;
-  isBaseline: boolean;
-  statusCode: number | null;
-  finalUrl: string | null;
-  responseSizeBytes: number | null;
-  contentHash: string | null;
-  errorMessage?: string;
-  durationMs: number;
-  errorKind: L4ErrorKind;
-};
+export const l4ProbeSchema = z.object({
+  url: z.string(),
+  userAgent: z.string(),
+  isBaseline: z.boolean(),
+  statusCode: z.number().nullable(),
+  finalUrl: z.string().nullable(),
+  responseSizeBytes: z.number().nullable(),
+  contentHash: z.string().nullable(),
+  errorMessage: z.string().optional(),
+  durationMs: z.number(),
+  errorKind: l4ErrorKindSchema,
+});
 
-export type L4ComparisonOutcome =
-  | "allowed"
-  | "blocked"
-  | "bot_error"
-  | "baseline_failed";
+export const l4ComparisonOutcomeSchema = z.enum([
+  "allowed",
+  "blocked",
+  "bot_error",
+  "baseline_failed",
+]);
 
 // When a comparison's outcome is "blocked", blockMechanism records WHY:
 // - "status" — bot got a 4xx/5xx, or got a 2xx with substantially shorter
 //   content than baseline (soft-paywall / stub).
 // - "stall" — bot fetch timed out while baseline succeeded fast (tarpit).
 // null for any non-blocked outcome.
-export type L4BlockMechanism = "status" | "stall" | null;
+export const l4BlockMechanismSchema = z
+  .enum(["status", "stall"])
+  .nullable();
 
-export type L4UrlComparison = {
-  url: string;
-  baselineStatus: number | null;
-  botStatus: number | null;
-  sizeRatio: number | null;
-  hashMatches: boolean;
-  outcome: L4ComparisonOutcome;
-  blockMechanism: L4BlockMechanism;
-};
+export const l4UrlComparisonSchema = z.object({
+  url: z.string(),
+  baselineStatus: z.number().nullable(),
+  botStatus: z.number().nullable(),
+  sizeRatio: z.number().nullable(),
+  hashMatches: z.boolean(),
+  outcome: l4ComparisonOutcomeSchema,
+  blockMechanism: l4BlockMechanismSchema,
+});
 
-export type L4BotAggregate = "allowed" | "blocked" | "mixed" | "unknown";
+export const l4BotAggregateSchema = z.enum([
+  "allowed",
+  "blocked",
+  "mixed",
+  "unknown",
+]);
 
-export type L4BotResult = {
-  ua: string;
-  platform: AiPlatform;
-  purpose: BotPurpose;
-  perUrl: L4UrlComparison[];
-  aggregate: L4BotAggregate;
-};
+export const l4BotResultSchema = z.object({
+  ua: z.string(),
+  platform: aiPlatformSchema,
+  purpose: botPurposeSchema,
+  perUrl: z.array(l4UrlComparisonSchema),
+  aggregate: l4BotAggregateSchema,
+});
 
-export type L4Status = "ok" | "no_urls" | "baseline_failed" | "error";
+export const l4StatusSchema = z.enum([
+  "ok",
+  "no_urls",
+  "baseline_failed",
+  "error",
+]);
 
-export type L4Result = {
-  rootDomain: string;
-  fetchedAt: string;
-  status: L4Status;
-  errorMessage?: string;
-  sampleSource: SitemapSource;
-  sampleSourceUrl: string | null;
-  sampleUrls: string[];
-  baselineUserAgent: string;
-  probes: L4Probe[];
-  perBot: L4BotResult[];
-};
+// Runtime schema for the persisted L4 signal. Source of truth.
+export const l4ResultSchema = z.object({
+  rootDomain: z.string(),
+  fetchedAt: z.string(),
+  status: l4StatusSchema,
+  errorMessage: z.string().optional(),
+  sampleSource: sitemapSourceSchema,
+  sampleSourceUrl: z.string().nullable(),
+  sampleUrls: z.array(z.string()),
+  baselineUserAgent: z.string(),
+  probes: z.array(l4ProbeSchema),
+  perBot: z.array(l4BotResultSchema),
+});
+
+export type L4ErrorKind = z.infer<typeof l4ErrorKindSchema>;
+export type L4Probe = z.infer<typeof l4ProbeSchema>;
+export type L4ComparisonOutcome = z.infer<typeof l4ComparisonOutcomeSchema>;
+export type L4BlockMechanism = z.infer<typeof l4BlockMechanismSchema>;
+export type L4UrlComparison = z.infer<typeof l4UrlComparisonSchema>;
+export type L4BotAggregate = z.infer<typeof l4BotAggregateSchema>;
+export type L4BotResult = z.infer<typeof l4BotResultSchema>;
+export type L4Status = z.infer<typeof l4StatusSchema>;
+export type L4Result = z.infer<typeof l4ResultSchema>;
 
 type AttemptResult = {
   statusCode: number | null;

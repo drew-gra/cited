@@ -25,19 +25,22 @@
  * the same userAgent() string the rest of Cited uses.
  */
 
+import { z } from "zod";
 import { userAgent } from "../policy";
 
 const WIKIPEDIA_SEARCH_URL = "https://en.wikipedia.org/w/api.php";
 const WIKIPEDIA_FETCH_TIMEOUT_MS = 5_000;
 const MAX_RESULTS_TO_VERIFY = 3;
 
-export type WikipediaLookupResult = {
-  queriedTerm: string;
-  status: "found" | "not_found" | "error";
-  matchedTitle: string | null;
-  matchedPageId: number | null;
-  errorMessage?: string;
-};
+export const wikipediaLookupResultSchema = z.object({
+  queriedTerm: z.string(),
+  status: z.enum(["found", "not_found", "error"]),
+  matchedTitle: z.string().nullable(),
+  matchedPageId: z.number().nullable(),
+  errorMessage: z.string().optional(),
+});
+
+export type WikipediaLookupResult = z.infer<typeof wikipediaLookupResultSchema>;
 
 type SearchResponse = {
   query?: {

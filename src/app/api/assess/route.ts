@@ -2,30 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { outlets, assessmentRuns, signals } from "@/lib/db/schema";
+import { outlets, assessmentRuns } from "@/lib/db/schema";
+import { loadLatestSignalsPerLayer, parseSignal } from "@/lib/db/queries";
 import { normalizeUrl } from "@/lib/domain";
 import { checkAndRecordIpRateLimit } from "@/lib/rate-limit";
 import { inngest } from "@/lib/inngest/client";
 import { verdictForPreflight } from "@/lib/preflight-verdicts";
-import type { PreflightSignal } from "@/lib/layers/preflight";
+import { preflightSignalSchema } from "@/lib/layers/preflight";
 
 // Layers the Inngest workflow currently runs end-to-end. The cache check
 // only short-circuits when every one of these has a fresh signal AND the
 // most-recent run has all of them marked done (not skipped). 0 is the
 // preflight (news-outlet classification) gate; 1-5 are the main pipeline.
 const IMPLEMENTED_LAYERS = [0, 1, 2, 3, 4, 5] as const;
-
-async function loadLatestPreflightSignal(
-  outletId: string,
-): Promise<PreflightSignal | null> {
-  const [row] = await db
-    .select()
-    .from(signals)
-    .where(and(eq(signals.outletId, outletId), eq(signals.layer, 0)))
-    .orderBy(desc(signals.capturedAt))
-    .limit(1);
-  return row ? (row.signalValue as PreflightSignal) : null;
-}
 
 const bodySchema = z.object({
   url: z.string().min(1),
@@ -84,31 +73,29 @@ export async function POST(req: NextRequest) {
 
   // Compute per-layer freshness. The Inngest workflow will only re-fetch
   // layers that are stale or missing; fresh layers reuse their existing
-  // signals from prior runs.
-  const freshnessPairs = await Promise.all(
-    IMPLEMENTED_LAYERS.map(async (layer) => {
-      const [latest] = await db
-        .select()
-        .from(signals)
-        .where(
-          and(eq(signals.outletId, outletId), eq(signals.layer, layer)),
-        )
-        .orderBy(desc(signals.capturedAt))
-        .limit(1);
-      if (!latest) return [layer, false] as const;
-      const ageSeconds = (Date.now() - latest.capturedAt.getTime()) / 1000;
-      return [layer, ageSeconds < latest.ttlSeconds] as const;
-    }),
-  );
-  const freshness: Record<number, boolean> = Object.fromEntries(
-    freshnessPairs,
-  );
+  // signals from prior runs. One DISTINCT ON query returns the latest row
+  // per layer, replacing what was previously seven separate lookups.
+  const latestByLayer = await loadLatestSignalsPerLayer(outletId);
+  const freshness: Record<number, boolean> = {};
+  for (const layer of IMPLEMENTED_LAYERS) {
+    const latest = latestByLayer.get(layer);
+    if (!latest) {
+      freshness[layer] = false;
+      continue;
+    }
+    const ageSeconds = (Date.now() - latest.capturedAt.getTime()) / 1000;
+    freshness[layer] = ageSeconds < latest.ttlSeconds;
+  }
 
   // If preflight is fresh and says not_news, surface the most recent run
   // whose preflight reflected that verdict — no point spinning up the
   // pipeline again to skip every gated layer. Otherwise the regular
   // freshness logic applies.
-  const preflightSignalForGate = await loadLatestPreflightSignal(outletId);
+  const preflightSignalForGate = parseSignal(
+    latestByLayer.get(0),
+    preflightSignalSchema,
+    { outletId, layer: 0 },
+  );
   const cachedPreflightVerdict = verdictForPreflight(preflightSignalForGate);
   const preflightFresh = freshness[0] === true;
   if (
