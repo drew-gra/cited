@@ -114,7 +114,7 @@ export default function MethodologyPage() {
         title="Layer 5 — Common Crawl presence"
         body={[
           "Common Crawl is one of the largest public web crawls and feeds many open and proprietary AI training corpora. Cited queries the Common Crawl CDX index for the domain and reports a training intensity and a trend direction.",
-          "This layer determines details behind how the URL in question can be used and has been used to train AI platforms.",
+          "This layer determines how the URL in question can be used and has been used to train AI platforms.",
         ]}
       />
 

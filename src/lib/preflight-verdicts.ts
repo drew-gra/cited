@@ -50,6 +50,29 @@ export const PREFLIGHT_FINDING_LABEL: Record<PreflightFinding, string> = {
   not_news: "Not a news outlet",
 };
 
+// A "degenerate" capture is one where the homepage fetch reported success
+// (status "ok") but produced no extractable signal whatsoever AND no
+// articles were discoverable. That is the fingerprint of a CDN bot-challenge
+// or JS-only shell served to our fetcher rather than a real read of the site
+// (e.g. SFGate behind Hearst's CDN serving an interstitial). Any genuine
+// homepage — news or not — exposes at least one of these markers, so their
+// total absence means we didn't actually read the page and the on-site
+// score is untrustworthy. Detected on read so a previously-degenerate
+// capture self-corrects without re-assessment.
+function isDegenerateCapture(signal: PreflightSignal): boolean {
+  const h = signal.homepage;
+  if (h.status !== "ok") return false;
+  const homepageHasSignal =
+    h.ogSiteName !== null ||
+    h.ogType !== null ||
+    h.metaGenerator !== null ||
+    h.sectionNavCount > 0 ||
+    h.newsroomLinkCount > 0 ||
+    h.commerceFingerprints.length > 0 ||
+    signal.platform !== null;
+  return !homepageHasSignal && signal.articles.fetchCount === 0;
+}
+
 export function verdictForPreflight(
   signal: PreflightSignal | null,
 ): PreflightVerdict {
@@ -78,19 +101,23 @@ export function verdictForPreflight(
     };
   }
 
-  if (signal.status === "error") {
-    // Homepage was unreachable, but we still collect Wikipedia and
-    // article-sample signals in the error path. If those independently
-    // produced strong external evidence (Wikipedia article alone is +3,
-    // and a sitemap-discoverable outlet with NewsArticle markup can
-    // easily clear 3 even without homepage), classify as news rather
-    // than dumping into borderline. The headline calls out the
-    // unreachable homepage so the user understands which evidence the
-    // verdict is resting on.
+  // "Couldn't actually read the site." Two shapes collapse here: the
+  // homepage fetch errored outright, OR it returned 200 but yielded a
+  // degenerate (content-free) capture — the CDN bot-challenge pattern. In
+  // both cases the on-site signals are untrustworthy, so we fall back to
+  // external evidence (Wikipedia, sitemap-discovered NewsArticle markup)
+  // the same way: score >= 3 means something independent of the homepage
+  // cleared the bar, so classify as news rather than dumping to borderline.
+  const homepageErrored = signal.status === "error";
+  const degenerate = isDegenerateCapture(signal);
+  if (homepageErrored || degenerate) {
+    const why = homepageErrored
+      ? `Homepage unreachable (${signal.errorMessage ?? "unknown error"})`
+      : "Homepage returned no readable signal (likely a bot challenge)";
     if (signal.score >= 3) {
       return {
         finding: "news",
-        headline: `Homepage unreachable (${signal.errorMessage ?? "unknown error"}); classified as news on external evidence (score ${signal.score}).`,
+        headline: `${why}; classified as news on external evidence (score ${signal.score}).`,
         confidence: "medium",
         score: signal.score,
         reasons: signal.reasons,
@@ -98,7 +125,7 @@ export function verdictForPreflight(
     }
     return {
       finding: "borderline",
-      headline: `Preflight could not run (${signal.errorMessage ?? "unknown error"}); proceeding with caution.`,
+      headline: `${why}; proceeding with caution.`,
       confidence: "low",
       score: signal.score,
       reasons: signal.reasons,
