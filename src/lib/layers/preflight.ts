@@ -105,7 +105,10 @@ export const preflightSignalSchema = z.object({
   wikipedia: wikipediaLookupResultSchema.nullable(),
   platform: platformHintSchema.nullable(),
   newsletterPlatformOverride: z.boolean(),
-  socialPlatformDenied: z.boolean(),
+  // Added in the social-platform-denylist commit; absent in signals stored
+  // before it. Default false on read so older signals still validate — a
+  // signal predating the denylist definitionally wasn't denied.
+  socialPlatformDenied: z.boolean().default(false),
   score: z.number(),
   reasons: z.array(preflightReasonSchema),
 });

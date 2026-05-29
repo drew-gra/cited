@@ -73,7 +73,9 @@ export const l4ProbeSchema = z.object({
   contentHash: z.string().nullable(),
   errorMessage: z.string().optional(),
   durationMs: z.number(),
-  errorKind: l4ErrorKindSchema,
+  // Added after early probes were stored; default null so older probe
+  // records still validate. Not read at verdict time — forensic only.
+  errorKind: l4ErrorKindSchema.default(null),
 });
 
 export const l4ComparisonOutcomeSchema = z.enum([
@@ -99,7 +101,10 @@ export const l4UrlComparisonSchema = z.object({
   sizeRatio: z.number().nullable(),
   hashMatches: z.boolean(),
   outcome: l4ComparisonOutcomeSchema,
-  blockMechanism: l4BlockMechanismSchema,
+  // Added after early comparisons were stored; default null so older
+  // signals validate. A null mechanism falls back to the generic blocked
+  // headline — the finding (restrictive) is unaffected.
+  blockMechanism: l4BlockMechanismSchema.default(null),
 });
 
 export const l4BotAggregateSchema = z.enum([
