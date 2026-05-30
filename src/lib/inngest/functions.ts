@@ -17,7 +17,8 @@ import { runPreflight, preflightSignalSchema } from "../layers/preflight";
 import { verdictForPreflight } from "../preflight-verdicts";
 import { BASELINE_USER_AGENT, TTL_SECONDS } from "../policy";
 import { BOTS } from "../ai-platforms";
-import { parseSignal } from "../db/queries";
+import { parseSignal, loadBlocklist } from "../db/queries";
+import { isBlocked } from "../blocklist";
 
 export const assessOutlet = inngest.createFunction(
   {
@@ -68,8 +69,12 @@ export const assessOutlet = inngest.createFunction(
           .where(eq(assessmentRuns.id, runId)),
       );
 
+      const blocklistForRun = await step.run("layer-0-load-blocklist", () =>
+        loadBlocklist(),
+      );
+
       const preflight = await step.run("layer-0-preflight", () =>
-        runPreflight(rootDomain),
+        runPreflight(rootDomain, { blocklist: blocklistForRun }),
       );
 
       await step.run("layer-0-persist", async () => {
@@ -89,7 +94,10 @@ export const assessOutlet = inngest.createFunction(
 
     // Load the latest preflight signal (either just-computed or reused
     // from a prior run if L0 wasn't in layersToRun) and decide whether
-    // to short-circuit the pipeline.
+    // to short-circuit the pipeline. The blocklist is queried again here
+    // because L0 may not have run in this invocation (surgical refresh
+    // skips it when the prior signal is still fresh), so we can't assume
+    // blocklistForRun above was loaded.
     const preflightVerdict = await step.run(
       "evaluate-preflight",
       async () => {
@@ -103,7 +111,9 @@ export const assessOutlet = inngest.createFunction(
           outletId,
           layer: 0,
         });
-        return verdictForPreflight(signal);
+        const blocklist = await loadBlocklist();
+        const manuallyBlocked = isBlocked(rootDomain, blocklist);
+        return verdictForPreflight(signal, manuallyBlocked);
       },
     );
 

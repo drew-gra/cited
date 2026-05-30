@@ -149,6 +149,25 @@ export const knownRelationships = pgTable("known_relationships", {
     .defaultNow(),
 });
 
+// Manual L0 blocklist. Hand-curated denylist for outlets that pass the
+// preflight heuristic but which the operator categorically refuses to
+// classify as news (propaganda, sufficiently sophisticated AI aggregators,
+// etc.). Edit rows in Drizzle Studio — adds/removes take effect on the
+// next assessment without a deploy. Suffix-matching at the lookup site:
+// an entry "examplepropaganda.com" blocks both that domain and every
+// subdomain under it. Empty by design — populated only by the operator.
+export const manualBlocklist = pgTable("manual_blocklist", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rootDomain: text("root_domain").notNull().unique(),
+  // Operator's own annotation — never surfaced to end users; the
+  // result-page verdict for any blocked outlet is the neutral, generic
+  // "Not classified as news." with no public hint of the mechanism.
+  reason: text("reason"),
+  addedAt: timestamp("added_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 // IP rate limits — backs the 20 fresh assessments / IP / hour cap.
 // Schema deviation from brief: anti-abuse infrastructure not enumerated in the
 // schema list but required by the spec.

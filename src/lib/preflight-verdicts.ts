@@ -75,7 +75,27 @@ function isDegenerateCapture(signal: PreflightSignal): boolean {
 
 export function verdictForPreflight(
   signal: PreflightSignal | null,
+  manuallyBlocked: boolean = false,
 ): PreflightVerdict {
+  // Manual blocklist override — checked before EVERYTHING else, including
+  // the null-signal branch. The caller computes this from the live
+  // manual_blocklist table at read time (not from any persisted field on
+  // the signal), so add/remove on the blocklist takes effect immediately
+  // for cached and brand-new assessments alike.
+  //
+  // Headline is deliberately generic — indistinguishable from any other
+  // not_news verdict. The result page already hides L0 evidence when
+  // preflight is not_news, so the mechanism stays invisible to end users.
+  if (manuallyBlocked) {
+    return {
+      finding: "not_news",
+      headline: "Not classified as news.",
+      confidence: "high",
+      score: signal?.score ?? 0,
+      reasons: signal?.reasons ?? [],
+    };
+  }
+
   if (!signal) {
     return {
       finding: "borderline",

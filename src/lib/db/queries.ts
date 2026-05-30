@@ -1,7 +1,7 @@
 import { desc, eq, type InferSelectModel } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from ".";
-import { signals } from "./schema";
+import { signals, manualBlocklist } from "./schema";
 
 export type SignalRow = InferSelectModel<typeof signals>;
 
@@ -44,4 +44,30 @@ export async function loadLatestSignalsPerLayer(
   const map = new Map<number, SignalRow>();
   for (const row of rows) map.set(row.layer, row);
   return map;
+}
+
+// Load every root_domain in the manual L0 blocklist. The table is intended
+// to stay tiny (single-digit to low-hundreds), so a full table scan per
+// request is fine and avoids any caching coherence concern when the
+// operator edits a row in Drizzle Studio. Returns lowercased entries so
+// the suffix-match in src/lib/blocklist.ts can compare directly.
+//
+// Graceful fallback: if the query throws (most likely cause: the migration
+// for the manual_blocklist table hasn't been applied yet in this
+// environment), we log + return an empty list rather than 500-ing the
+// whole assessment flow. The deploy and the migration can land in either
+// order without breaking the site.
+export async function loadBlocklist(): Promise<string[]> {
+  try {
+    const rows = await db
+      .select({ rootDomain: manualBlocklist.rootDomain })
+      .from(manualBlocklist);
+    return rows.map((r) => r.rootDomain.toLowerCase());
+  } catch (err) {
+    console.error(
+      "[cited] Failed to load manual_blocklist (migration applied?); treating as empty.",
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
 }

@@ -54,6 +54,7 @@ import {
   preflightReasonSchema,
   type PreflightReason,
 } from "../preflight-verdicts";
+import { isBlocked } from "../blocklist";
 
 const PREFLIGHT_FETCH_TIMEOUT_MS = 6_000;
 const PREFLIGHT_ARTICLE_SAMPLE_SIZE = 3;
@@ -939,10 +940,67 @@ function score(args: {
   return { score: total, reasons };
 }
 
+// Minimal signal returned when we short-circuit (manual blocklist or
+// social denylist) without fetching the target. Same shape as a "we
+// didn't read anything" capture; the verdict is imposed by the caller
+// rather than derived from these empty fields.
+function emptyShortCircuitSignal(
+  rootDomain: string,
+  fetchedAt: string,
+): PreflightSignal {
+  return {
+    rootDomain,
+    fetchedAt,
+    status: "ok",
+    homepage: {
+      fetchedUrl: `https://${rootDomain}/`,
+      status: "ok",
+      httpStatus: null,
+      ogSiteName: null,
+      ogType: null,
+      metaGenerator: null,
+      sectionNavCount: 0,
+      sectionNavSamples: [],
+      newsroomLinkCount: 0,
+      newsroomLinkSamples: [],
+      commerceFingerprints: [],
+    },
+    articles: {
+      source: "none",
+      sampledUrls: [],
+      fetchCount: 0,
+      jsonLdNewsArticleCount: 0,
+      jsonLdGenericArticleCount: 0,
+      distinctBylines: [],
+      authorMetaTagHits: 0,
+      recentArticleCount: 0,
+    },
+    wikipedia: null,
+    platform: null,
+    newsletterPlatformOverride: false,
+    socialPlatformDenied: false,
+    score: 0,
+    reasons: [],
+  };
+}
+
 export async function runPreflight(
   rootDomain: string,
+  opts: { blocklist?: string[] } = {},
 ): Promise<PreflightSignal> {
   const fetchedAt = new Date().toISOString();
+
+  // Manual blocklist short-circuit. Caller queries the manual_blocklist
+  // table and passes the list in; matching domains skip every fetch (no
+  // wasted requests on outlets we will never classify as news, and no
+  // telegraphing the assessment to the blocked outlet). The verdict is
+  // imposed at read time by passing manuallyBlocked=true to
+  // verdictForPreflight — the persisted signal here doesn't record the
+  // block state so add/remove on the blocklist takes effect immediately
+  // for cached signals without needing a fresh assessment.
+  if (isBlocked(rootDomain, opts.blocklist ?? [])) {
+    return emptyShortCircuitSignal(rootDomain, fetchedAt);
+  }
 
   // Social-platform denylist short-circuits before any fetches. Skips
   // homepage / Wikipedia / article sampling entirely — there's no

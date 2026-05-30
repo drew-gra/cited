@@ -3,12 +3,17 @@ import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { outlets, assessmentRuns } from "@/lib/db/schema";
-import { loadLatestSignalsPerLayer, parseSignal } from "@/lib/db/queries";
+import {
+  loadLatestSignalsPerLayer,
+  loadBlocklist,
+  parseSignal,
+} from "@/lib/db/queries";
 import { normalizeUrl } from "@/lib/domain";
 import { checkAndRecordIpRateLimit } from "@/lib/rate-limit";
 import { inngest } from "@/lib/inngest/client";
 import { verdictForPreflight } from "@/lib/preflight-verdicts";
 import { preflightSignalSchema } from "@/lib/layers/preflight";
+import { isBlocked } from "@/lib/blocklist";
 
 // Layers the Inngest workflow currently runs end-to-end. The cache check
 // only short-circuits when every one of these has a fresh signal AND the
@@ -96,7 +101,16 @@ export async function POST(req: NextRequest) {
     preflightSignalSchema,
     { outletId, layer: 0 },
   );
-  const cachedPreflightVerdict = verdictForPreflight(preflightSignalForGate);
+  // Read-time blocklist check — source of truth for whether this outlet
+  // is currently denied, independent of whatever the persisted signal
+  // recorded. Adds/removes in Drizzle Studio take effect on the next
+  // request without re-assessment.
+  const blocklist = await loadBlocklist();
+  const manuallyBlocked = isBlocked(normalized.rootDomain, blocklist);
+  const cachedPreflightVerdict = verdictForPreflight(
+    preflightSignalForGate,
+    manuallyBlocked,
+  );
   const preflightFresh = freshness[0] === true;
   if (
     !parsed.forceRefresh &&
@@ -177,9 +191,12 @@ export async function POST(req: NextRequest) {
   // If preflight is fresh and definitively not_news, mark the gated
   // pipeline layers as skipped up front so the polling UI doesn't
   // briefly flash them as "pending" before the workflow short-circuits.
+  // Manually-blocked outlets also short-circuit immediately even if L0 is
+  // being re-run — we already know the verdict will be not_news.
   const willShortCircuit =
-    !layersToRun.includes(0) &&
-    cachedPreflightVerdict.finding === "not_news";
+    manuallyBlocked ||
+    (!layersToRun.includes(0) &&
+      cachedPreflightVerdict.finding === "not_news");
 
   const gatedLayerInitialStatus = (layer: 1 | 2 | 3 | 4 | 5) => {
     if (willShortCircuit) return "skipped" as const;

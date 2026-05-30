@@ -180,6 +180,61 @@ describe("degenerate-capture handling (regression: SFGate / e29eff1)", () => {
   });
 });
 
+// Manual L0 blocklist: when the read-time check tells verdictForPreflight
+// the domain is on the blocklist, the verdict is not_news with a neutral
+// headline regardless of what the signal contains.
+describe("manual L0 blocklist", () => {
+  it("manuallyBlocked=true => not_news regardless of a high score", () => {
+    const high = makeSignal({ score: 14 });
+    const v = verdictForPreflight(high, true);
+    expect(v.finding).toBe("not_news");
+    expect(v.confidence).toBe("high");
+  });
+
+  it("headline is the neutral generic, not the score-based one", () => {
+    const v = verdictForPreflight(makeSignal({ score: 14 }), true);
+    expect(v.headline).toBe("Not classified as news.");
+    // Specifically should NOT mention the score or "signals absent" — the
+    // mechanism stays invisible to end users.
+    expect(v.headline).not.toMatch(/score/i);
+    expect(v.headline).not.toMatch(/signals absent/i);
+  });
+
+  it("manuallyBlocked=true with null signal still resolves to not_news", () => {
+    expect(verdictForPreflight(null, true).finding).toBe("not_news");
+  });
+
+  it("manuallyBlocked=true beats every other rule (social denylist, errors, newsletter)", () => {
+    expect(
+      verdictForPreflight(makeSignal({ socialPlatformDenied: true }), true)
+        .finding,
+    ).toBe("not_news");
+    expect(
+      verdictForPreflight(
+        makeSignal({
+          newsletterPlatformOverride: true,
+          platform: "beehiiv",
+          score: 1,
+        }),
+        true,
+      ).finding,
+    ).toBe("not_news");
+    expect(
+      verdictForPreflight(makeSignal({ status: "error", score: 9 }), true)
+        .finding,
+    ).toBe("not_news");
+  });
+
+  it("manuallyBlocked=false (default) leaves the existing logic untouched", () => {
+    // Sanity check: passing false (or omitting) the new flag is identical
+    // to the pre-blocklist behavior.
+    expect(verdictForPreflight(makeSignal({ score: 14 })).finding).toBe("news");
+    expect(verdictForPreflight(makeSignal({ score: 14 }), false).finding).toBe(
+      "news",
+    );
+  });
+});
+
 // Regression guard for 38d798b — strict schemas must tolerate signals
 // persisted before socialPlatformDenied existed.
 describe("schema back-compat (regression: 38d798b)", () => {

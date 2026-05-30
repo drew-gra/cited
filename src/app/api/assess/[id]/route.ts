@@ -7,7 +7,12 @@ import {
   type LayerStatus,
   type RunStatus,
 } from "@/lib/db/schema";
-import { loadLatestSignalsPerLayer, parseSignal } from "@/lib/db/queries";
+import {
+  loadLatestSignalsPerLayer,
+  loadBlocklist,
+  parseSignal,
+} from "@/lib/db/queries";
+import { isBlocked } from "@/lib/blocklist";
 import type {
   AssessResponse,
   LayerNumber,
@@ -73,7 +78,12 @@ export async function GET(_: Request, { params }: RouteContext) {
     ...ctx,
     layer: 0,
   });
-  const preflightVerdict = verdictForPreflight(preflightSignal);
+  // Read-time blocklist check — source of truth, independent of what the
+  // persisted L0 signal recorded. Adds/removes in Drizzle Studio take
+  // effect immediately on the next page load with no re-assessment.
+  const blocklist = await loadBlocklist();
+  const manuallyBlocked = isBlocked(outlet.rootDomain, blocklist);
+  const preflightVerdict = verdictForPreflight(preflightSignal, manuallyBlocked);
 
   const layer1Signal = parseSignal(
     latestPerLayer.get(1),
